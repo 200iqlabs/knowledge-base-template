@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Pre-commit hook: keep the generated task registry in step with the task files.
+#
+# The registry index and the AUTO section of every entity status.md are generated,
+# never hand-written. Regenerating them here — rather than trusting people to run
+# the generator — is what makes "the file is the task" hold: you edit a task file,
+# and the boards that summarise it are correct in the same commit.
+#
+# Failure is never fatal. A missing Python or a broken generator warns and exits 0:
+# a stale index is a nuisance, a hook that blocks commits is a reason to disable
+# hooks entirely.
+#
+# Installation: `bash tools/hooks/install.sh`.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+regen_tasks() {
+  local tasks_re="^context/(.*/)?tasks/[^/]+\\.md$"
+  local script="$REPO_ROOT/tools/tasks/regen.py"
+
+  # Portable: bash 3.2 on macOS has no `mapfile`.
+  local staged=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && staged+=("$line")
+  done < <(git diff --cached --name-only --diff-filter=AMD \
+    | grep -E "$tasks_re" \
+    || true)
+
+  if [[ ${#staged[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  if ! command -v python >/dev/null 2>&1; then
+    echo "⚠ Pre-commit: tasks/ changed but Python is unavailable — the task index may be stale" >&2
+    return 0
+  fi
+  if [[ ! -f "$script" ]]; then
+    echo "⚠ Pre-commit: $script not found — the task index may be stale" >&2
+    return 0
+  fi
+
+  # Files already carrying unstaged edits before the generator runs. Those must not be
+  # staged afterwards: `git add` would sweep somebody else's in-progress work (parallel
+  # sessions are normal) into this commit. Fully generated files are safe.
+  local dirty_before
+  dirty_before=$(git diff --name-only || true)
+
+  echo "pre-commit: regenerating the task registry…"
+  local rewritten
+  if ! rewritten=$(python "$script" --porcelain 2>/dev/null); then
+    echo "⚠ Pre-commit: regen.py failed — the task index may be stale (commit proceeds)" >&2
+    return 0
+  fi
+
+  local file
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    if grep -Fxq "$file" <<<"$dirty_before"; then
+      echo "⚠ Pre-commit: $file already had unstaged changes — its AUTO section was regenerated, but the file was NOT added to this commit" >&2
+    else
+      git add "$file" 2>/dev/null || true
+    fi
+  done <<<"$rewritten"
+}
+
+regen_tasks
+
+exit 0

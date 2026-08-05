@@ -1,0 +1,101 @@
+# Task registry contract — the single source of truth for the shape of a task file.
+#
+# Read by BOTH the registry generator (which refuses to index a task that violates
+# this) and context-lint (checks #10–#12). Neither keeps its own copy: a duplicated
+# enum drifts the first time somebody adds a value to one of them.
+#
+# Prose description of the model: CLAUDE.md -> "Task registry".
+# Run `/setup` after creating a project from this template to fill it in.
+
+required_fields: [title, owner, status, priority, created]
+optional_fields: [due, blocked_by, group, source, closed]
+
+# Replace with one id per person who owns work. `shared` is the everyone-task: it
+# shows up in every person's report.
+owners: [alice, bob, shared]
+statuses: [todo, open, blocked, done]
+priorities: [urgent, high, normal, low]
+
+# How an owner id is displayed in generated output. Optional: an id with no entry
+# here is printed as written. Lives in the contract, not in the generator, so the
+# generator carries no names of the people using it.
+owner_labels:
+  alice: Alice
+  bob: Bob
+  shared: shared
+
+# Whose report `/today` builds when no owner is named.
+default_owner: alice
+
+# Statuses that keep a task in the open lists (index, status.md AUTO section, report).
+live_statuses: [todo, open, blocked]
+
+# Header field that groups tasks across entities (epics, compliance packages).
+group_field: group
+
+# Fields that must not appear in a task header, with the reason shown to the user.
+forbidden_fields:
+  sprint: sprint membership lives in the sprint file
+  entity: the entity follows from the file path
+
+# Directory layout.
+registry_path: context/tasks
+entity_dir_name: tasks
+archive_dir: _archive
+
+# Scope containers, relative to the repo root. Every entity is a direct child of one
+# of these, so the list answers two questions at once: where a tasks/ directory may
+# live (`<root>/*/<entity_dir_name>`) and which entities the report checks for silence.
+# Adding a scope is a one-line change here; the generator holds no paths of its own.
+entity_roots:
+  - context/projects
+
+# Text the generator writes INTO your files — section headings, table headers, empty
+# states. It lives here rather than in the generator so that changing the language of
+# your boards never means editing Python, and so one generator can serve repositories
+# that write in different languages. Console output is not here: it leaves no trace in
+# the repo, so it is English in the code.
+labels:
+  index_heading: "Live tasks"
+  index_table_header: "| Entity | Task | Owner | State | Priority | Due | Sprint |"
+  index_table_divider: "|---|---|---|:---:|---|---|:---:|"
+  index_empty: "No live tasks."
+  groups_heading: "Groups"
+  group_line_due: "due"
+  archive_heading: "Closed, awaiting archiving"
+  archive_line_closed: "closed"
+  status_heading: "## Tasks"
+  status_table_header: "| State | Task | Owner | Due |"
+  status_table_divider: "|:---:|---|---|---|"
+  status_empty: "No open tasks."
+  # Footer of the generated index. Placeholders: {live} {done} {sprint} {date}
+  index_footer: "> {live} live, {done} to archive · {sprint} · generated {date}"
+  sprint_active: "active sprint: {name}"
+  sprint_none: "no active sprint"
+
+# Text of the `/today` report. A separate block because the report is ephemeral —
+# never committed, never sent to anyone — but a human reads it every day, so its
+# language matters just as much as the boards'.
+report_labels:
+  title: "Task report — {who}"
+  subtitle: "> **{date}** · generated on demand"
+  everyone: "everyone"
+  overdue_heading: "Overdue"
+  overdue_empty: "Nothing past due."
+  today_heading: "Due today"
+  today_empty: "Nothing due today."
+  sprint_heading: "Sprint {name}, remaining"
+  sprint_heading_none: "Sprint, remaining"
+  sprint_empty: "Nothing left in the sprint."
+  sprint_missing: "No active sprint."
+  blocked_heading: "Blocked on an outside party"
+  blocked_empty: "Nothing is waiting on an outside party."
+  blocked_waiting_on: "waiting on"
+  blocked_unnamed: "party not named"
+  silence_heading: "Quiet (>{days} days)"
+  silence_empty: "Every entity moved within the threshold."
+  silence_line: "- **{name}** — last commit {age} days ago"
+  task_due: "due {due}"
+  task_no_due: "no due date"
+  footer: "> Generated {stamp} from the working directory."
+  written_to: "[+] also written to {path}"

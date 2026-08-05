@@ -1,0 +1,23 @@
+# Secrets. Only the .example variants belong in git.
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# Python artefacts left behind by the tools/ scripts.
+__pycache__/
+*.pyc
+
+# Editor and OS noise.
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Machine-local Claude Code settings. The shared .claude/ content is committed.
+.claude/settings.local.json
+
+# The task report is ephemeral by design: generated on demand, never committed.
+context/tasks/_today.md

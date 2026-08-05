@@ -1,0 +1,87 @@
+# context-lint — default configuration.
+#
+# Deliberately minimal: one scope, the conventions the rules describe, nothing else.
+# Grow it as your knowledge base grows — every value here is a knob, not a constant
+# in the script. See README.md for the check catalogue and what each key controls.
+#
+# A repo that keeps its knowledge base somewhere else passes its own file instead:
+#   python tools/context-lint/lint.py --config path/to/config.yaml
+
+# Folder-shaped scopes. Each root holds entity folders — one folder per project,
+# client, customer, or whatever else you track. Add a root per scope you keep.
+scan_roots:
+  - name: projects
+    path: context/projects
+    required_files: [project.md, status.md, catalog.md]
+    index: _index.md
+
+# File-shaped scopes: one .md per entity, no folder. Only the index<->files check
+# applies here. Leave empty until you have a scope shaped that way.
+file_scopes: []
+
+thresholds:
+  freshness_days: 30      # check #4: warn when 'updated:' / 'Last updated' is older
+  status_max_lines: 80    # check #8: warn when status.md exceeds this many lines
+
+# check #6: filename substrings that mark a sent message living in the wrong place.
+# A file named like a message belongs in communication/, not in deliverables/.
+communication_patterns:
+  - "-wa-"
+  - "-mail-"
+  - "-email-"
+  - "-message-"
+  - "-linkedin-"
+
+# Directories excluded from the catalog<->files check (#1): referenced by folder,
+# not file by file. Add any directory that fills up mechanically — generated runs,
+# bulk exports, evaluation sheets — because nobody catalogues those one by one.
+catalog_exclude_dirs:
+  - output
+  - archive
+  - inbox
+  - tasks
+
+# check #1 forward: only these file types are mapped per-file in catalog.md.
+catalog_check_extensions: [".md"]
+
+# A subtree containing this file catalogues itself: check #1 stops at its boundary
+# and instead requires the entity's catalog.md to name the folder. Naming the rule
+# beats listing exceptions — it holds for subtrees that do not exist yet.
+self_index_marker: _index.md
+
+# Directories whose files must carry a YYYY-MM-DD date prefix (check #3).
+date_prefix_dirs: [communication, archive]
+
+# Directory name treated as sent-message storage (checks #3, #7).
+communication_dir: communication
+
+# Structural files that are never catalogued content (skipped by check #1).
+structural_files:
+  - status.md
+  - catalog.md
+  - project.md
+  - README.md
+  - CLAUDE.md
+  - AGENTS.md
+
+# Files whose freshness is tracked by check #4. Only the living board: a stale
+# status.md is signal, while a reference anchor is stable by design, so flagging
+# it after 30 days would be noise.
+freshness_files:
+  - status.md
+
+# check #3: filenames exempt from the date-prefix rule (glob patterns, basename).
+name_exceptions:
+  - "README.md"
+  - "_*.md"
+
+# check #6: files allowed to keep a communication-like name inside deliverables/
+# (false positives: process docs that merely contain 'mail' as a word).
+deliverables_comm_exceptions: []
+
+# checks #10–#12: task registry. Allowed header values and directory layout are NOT
+# repeated here — they live in the schema file below, which the registry generator
+# reads as well. A second copy of the enums would drift the first time somebody
+# added a value to one of them.
+task_registry:
+  schema: tools/tasks/schema.yaml
