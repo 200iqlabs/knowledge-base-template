@@ -7,17 +7,31 @@ Task report from the registry. Argument (optional — an owner id from `tools/ta
 ## Steps
 
 1. Run the generator with the **Bash tool, not PowerShell** (PowerShell mangles UTF-8 and
-   the status icons come back unreadable):
-   - No argument → `python tools/tasks/regen_today.py`
-   - With an argument → `python tools/tasks/regen_today.py --owner "<argument>"`
+   the status icons come back unreadable). The generator ships with this core; the schema
+   belongs to the repository that consumes it, so **pass it explicitly**:
+
+   ```bash
+   python <core>/tools/tasks/regen_today.py --schema <repo>/tools/tasks/schema.yaml
+   ```
+
+   `<core>` is `.` when this core *is* the repository, and `template` when the core is
+   vendored into a working repository — the same split that governs the linter. Add
+   `--owner "<argument>"` when an argument was given.
+
+   **Without `--schema` the generator falls back to the schema sitting next to the
+   script** — the core's own example entity — whose owner ids and task directories are
+   not the consuming repo's. A real owner id is then rejected outright
+   (`--owner 'X' is not one of [...]`), and an id that happens to collide with an example
+   one yields an empty report instead of an error. Do not omit the flag.
 
    The script is **read-only towards the repo** — it prints the report and writes
    nothing. The `--write` flag additionally saves `context/tasks/_today.md` (gitignored,
    for diffing two runs), but you do not normally need it.
 
 2. **Before showing the report**, check that the index is current:
-   `python tools/tasks/regen.py`. A task created in this session but never regenerated
-   will not appear in the report, and the user would be shown something untrue.
+   `python <core>/tools/tasks/regen.py --schema <repo>/tools/tasks/schema.yaml`. A task
+   created in this session but never regenerated will not appear in the report, and the
+   user would be shown something untrue.
 
 3. Show the report in full. Do not summarize sections and do not reorder them — the
    sections are ordered by urgency, and shortening them destroys the one thing the
