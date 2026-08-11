@@ -7,8 +7,21 @@
 # Prose description of the model: CLAUDE.md -> "Task registry".
 # Run `/setup` after creating a project from this template to fill it in.
 
-required_fields: [title, owner, status, priority, created]
+required_fields: [id, title, owner, status, priority, created]
 optional_fields: [due, blocked_by, group, source, closed]
+
+# Prefix of task identifiers. An id is `<id_prefix>-<number>`, allocated once and never
+# changed — not on a retitle, not on a `git mv`, not on archiving. The prefix is what
+# tells two repositories' tasks apart when one hands work to the other, so leaving the
+# template default in place defeats the point: the linter reports it as an ERROR once
+# the example entity below is gone. `/setup` sets it.
+id_prefix: REPO
+
+# The example entity shipped with the template, relative to the repo root. Its presence
+# means "nobody has run /setup yet", which is what gates the placeholder-prefix check:
+# a fresh clone is green, a repository in use must have a prefix of its own. `/setup`
+# deletes the entity, and with it this key.
+template_example_entity: context/projects/EXAMPLE_PROJECT
 
 # Replace with one id per person who owns work. `shared` is the everyone-task: it
 # shows up in every person's report.
@@ -26,6 +39,11 @@ owner_labels:
 
 # Whose report `/today` builds when no owner is named.
 default_owner: alice
+
+# The everyone-task owner: tasks owned by it appear in every person's report, never only
+# in one. Must be one of `owners`. Named here rather than in the generator, which cannot
+# know what a given repository calls it.
+shared_owner: shared
 
 # Statuses that keep a task in the open lists (index, status.md AUTO section, report).
 live_statuses: [todo, open, blocked]
@@ -57,17 +75,24 @@ entity_roots:
 # the repo, so it is English in the code.
 labels:
   index_heading: "Live tasks"
-  index_table_header: "| Entity | Task | Owner | State | Priority | Due | Sprint |"
-  index_table_divider: "|---|---|---|:---:|---|---|:---:|"
+  index_table_header: "| ID | Entity | Task | Owner | State | Priority | Due | Sprint |"
+  index_table_divider: "|---|---|---|---|:---:|---|---|:---:|"
   index_empty: "No live tasks."
   groups_heading: "Groups"
   group_line_due: "due"
   archive_heading: "Closed, awaiting archiving"
   archive_line_closed: "closed"
   status_heading: "## Tasks"
-  status_table_header: "| State | Task | Owner | Due |"
-  status_table_divider: "|:---:|---|---|---|"
+  status_table_header: "| ID | State | Task | Owner | Due |"
+  status_table_divider: "|---|:---:|---|---|---|"
   status_empty: "No open tasks."
+  # The lookup table a session working in another repository reads to turn an id it was
+  # handed into a file it can open. Paths are relative to the repo root, POSIX separators,
+  # because the reader is not necessarily on this machine's OS.
+  id_map_heading: "ID → path"
+  id_map_table_header: "| ID | Path |"
+  id_map_table_divider: "|---|---|"
+  id_map_empty: "No live tasks to resolve."
   # Footer of the generated index. Placeholders: {live} {done} {sprint} {date}
   index_footer: "> {live} live, {done} to archive · {sprint} · generated {date}"
   sprint_active: "active sprint: {name}"
@@ -92,6 +117,12 @@ report_labels:
   blocked_empty: "Nothing is waiting on an outside party."
   blocked_waiting_on: "waiting on"
   blocked_unnamed: "party not named"
+  # Tasks a session in another repository has written to. They land in the working
+  # directory uncommitted, so without this section they would be invisible until
+  # somebody happened to run `git status`.
+  external_heading: "Touched from outside"
+  external_empty: "Nothing changed from outside."
+  external_line: "- `{id}` **{title}** — {status}"
   silence_heading: "Quiet (>{days} days)"
   silence_empty: "Every entity moved within the threshold."
   silence_line: "- **{name}** — last commit {age} days ago"

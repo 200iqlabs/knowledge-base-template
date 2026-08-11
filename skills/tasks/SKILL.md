@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: Manage the task registry in the repo — create a task in the right entity's tasks/ directory, review "what do I have today" filtered by owner and due date, change state, plan and close a sprint, prioritise the open pool. Use when the user asks about their tasks, wants to write something down to do, plans the week, or closes a sprint.
+description: Manage the task registry in the repo — create a task in the right entity's tasks/ directory, review "what do I have today" filtered by owner and due date, change state, plan and close a sprint, prioritise the open pool, hand a task to a session working in another repository. Use when the user asks about their tasks, wants to write something down to do, plans the week, closes a sprint, or sends work outside.
 ---
 
 # /tasks — the task registry
@@ -22,6 +22,7 @@ The mode follows from what the user asks for. Argument: `$ARGUMENTS`.
 | "let's close the sprint", "end of week" | **Sprint — closing** |
 | "sort this out for me", "where do I start" | **Prioritisation** |
 | "what did we close in April", "have we done X already" | **History** |
+| "hand this to the other repo", "run this in the product repo" | **Hand a task outside** |
 
 ## New task
 
@@ -34,9 +35,12 @@ The mode follows from what the user asks for. Argument: `$ARGUMENTS`.
    - `priority` — propose a value and name the reason; the user confirms.
    - `due` — only when a deadline actually exists. An empty due date beats an invented one.
    - `created` — today's date.
+   - `id` — **ask the generator**: `python tools/tasks/regen.py --next-id`. Never invent
+     one and never count rows in the index; the generator knows about `_archive/`, where
+     numbers stay spoken for forever.
 3. **Write the file** `<entity>/tasks/<slug>.md`. Slug from the title, kebab-case, no
-   date. Check that the file does not already exist — a duplicated task is worse than a
-   missing one.
+   date and no id. Check that the file does not already exist — a duplicated task is
+   worse than a missing one.
 4. **Run the generator**: `python tools/tasks/regen.py`.
 5. **Commit** with the entity's scope (an organisation-wide task → the registry scope).
    The commit message names the task, not the file.
@@ -73,7 +77,9 @@ Then: generator, then commit.
 2. Propose the week's contents: overdue items and items due this week go in by default,
    the user picks the rest. **Say explicitly what is being left out of the sprint** —
    that is the backlog, and nobody will see it afterwards except through the index.
-3. Add the links to the active sprint file (or create a new one if the week has turned).
+3. Add the entries to the active sprint file (or create a new one if the week has
+   turned), one per line as `- <ID> — <Title>`. Copy the title from the task's `title`
+   field verbatim; the linter compares the two and reports any divergence.
 4. Generator, then commit with the registry scope.
 
 ## Sprint — closing
@@ -82,8 +88,8 @@ Perform the ritual from [`context/tasks/README.md`](../../context/tasks/README.m
 steps 1–4 and 6 are mechanical; step 5 (what carries into the new sprint) needs the
 user. Do not decide it yourself.
 
-Before you start: `python tools/tasks/regen.py --check`. A sprint with a dead link, or a
-task with no `closed` date, closes on false data.
+Before you start: `python tools/tasks/regen.py --check`. A sprint naming an id that is
+not in the registry, or a task with no `closed` date, closes on false data.
 
 ## Prioritisation
 
@@ -110,6 +116,53 @@ entity and the closing date — without those, a list of titles says nothing abo
 
 Do not look there during ordinary work on an entity: after a year that would mean
 reading a hundred closed matters to reach five open ones.
+
+## Hand a task outside
+
+When a task from this registry is going to be carried out by a session working in a
+different repository, the outgoing content — a prompt, a briefing file, a message — has
+to carry everything that session needs to report back. It will not have this repository's
+rules loaded, and it must not have to go looking for them.
+
+1. **Verify the id is unique.** `python tools/tasks/regen.py --check` reports a collision
+   with both paths. Do it *before* the id leaves: once it is out, correcting it means
+   chasing it through content you no longer control.
+2. **Establish the absolute path** to this repository's root — the reader is in a
+   different working directory, so a relative path resolves to the wrong place or to
+   nothing.
+3. **Paste the contract block** into the outgoing content, filled in:
+
+   ```markdown
+   ## Task update contract
+
+   Task: <ID> — <Title>
+   Registry: <absolute path to this repo's root>
+
+   When you are done (or blocked), update the task in that repository:
+
+   1. Open `context/tasks/_index.md` there and find <ID> in the `ID → path` table.
+      Open the file it points at. If <ID> is not in the table, change nothing and say so
+      in your result — do not create a file and do not add the id anywhere.
+   2. Change only these header fields:
+      - `status:` → `done` (then fill `closed:` with today's date, YYYY-MM-DD)
+                  → `blocked` (then fill `blocked_by:` with who or what blocks it)
+      Leave `id`, `title`, `owner`, `priority`, `created`, `due` and the group field
+      exactly as they are.
+   3. Append a report at the end of the file, under a `## Reports from outside` heading
+      (create the heading if it is not there; never overwrite an existing entry):
+
+      ### <YYYY-MM-DD> · <repository name>
+      <what was done, in two or three sentences>
+      Artefact: <link to the PR, commit, or change on your side>
+
+   4. Do NOT run `git add`, `git commit` or `git push` in that repository. Leave the
+      change in the working directory — somebody working there will commit it with the
+      rest of that entity's scope.
+   ```
+
+4. **Check the direction of any access rule you are about to quote.** A repository this
+   one may only read is still allowed to write back here; that rule constrains outgoing
+   writes, not incoming ones. Quoting it symmetrically would shut the channel.
 
 ## Boundaries
 

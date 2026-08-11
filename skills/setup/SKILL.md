@@ -1,6 +1,6 @@
 ---
 name: setup
-description: One-time configuration of a knowledge base created from this template — the language of generated content, task owners, scope roots, thresholds, the pre-commit hook, and removing the example entity. Use when the user runs /setup, says the repo is freshly created from the template, or asks how to configure owners, scopes, or the language of the generated boards.
+description: One-time configuration of a knowledge base created from this template — the language of generated content, the task identifier prefix, task owners, scope roots, thresholds, the pre-commit hook, and removing the example entity. Use when the user runs /setup, says the repo is freshly created from the template, or asks how to configure owners, scopes, the id prefix, or the language of the generated boards.
 ---
 
 # /setup — configure a fresh knowledge base
@@ -43,13 +43,38 @@ it stays English in the code.
 
 After the change: `python tools/tasks/regen.py` and show the user the result.
 
-## Step 2 — Task owners
+## Step 2 — Task identifier prefix
+
+In `tools/tasks/schema.yaml` → `id_prefix`. It ships as `REPO` and **must be changed.**
+
+Every task carries an `id` of the form `<id_prefix>-<number>`, and the prefix is the part
+that says *which registry*. That matters the moment work leaves this repository: a session
+opened somewhere else is handed `ACME-142` and knows where to report back. If every
+knowledge base created from this template kept `REPO`, two of them in the same
+conversation would produce two `REPO-7`s and no way to tell them apart — which is the one
+job the identifier exists to do.
+
+Ask for a short uppercase token, usually an abbreviation of the organisation or the
+knowledge base itself: `ACME`, `KB`, `OPS`. Letters and digits, no spaces, no hyphen —
+the hyphen separates prefix from number.
+
+Existing tasks are not renumbered by this step; on a fresh clone the only ones are the
+example entity's, which go away at the end anyway.
+
+**Leaving the default is a lint error** once the example entity is removed (check #15).
+That ordering is deliberate: a fresh clone is green, a knowledge base in use must have a
+prefix of its own.
+
+## Step 3 — Task owners
 
 In `tools/tasks/schema.yaml`:
 
-- `owners` — one id per person who owns work. Lowercase, no spaces. Keep the
+- `owners` — one id per person who owns work. Lowercase, no spaces. Keep an
   everyone-task id (`shared` by default): it is what makes a task show up in every
   person's report.
+- `shared_owner` — which of those ids is the everyone-task. Change it here too if you
+  rename it in `owners`; the report reads this key, so a rename in one place only would
+  silently drop shared tasks from every person's report.
 - `owner_labels` — how each id is displayed. Optional; an id with no entry is printed as
   written.
 - `default_owner` — whose report `/today` builds with no argument. Usually whoever's
@@ -58,7 +83,7 @@ In `tools/tasks/schema.yaml`:
 Ask for the real names. Do not invent ids from the user's git config without asking —
 a wrong owner id silently fails validation on every task file that uses it.
 
-## Step 3 — Scope roots
+## Step 4 — Scope roots
 
 A **scope root** is a directory holding entity folders. The template ships with one,
 `context/projects`. Ask what the user actually tracks — projects, clients, customers,
@@ -77,7 +102,7 @@ it, adjusted to that scope's anchor file.
 **If they disagree, the tools disagree**: the linter will check an entity whose tasks
 the generator refuses to index, or the other way round. Re-run both after editing.
 
-## Step 4 — Thresholds
+## Step 5 — Thresholds
 
 In `tools/context-lint/config.yaml` → `thresholds`:
 
@@ -92,7 +117,7 @@ Also worth a look while you are here: `catalog_exclude_dirs`. Any directory that
 up mechanically — generated runs, bulk exports — belongs there, or the linter will ask
 the user to catalogue a thousand files one by one.
 
-## Step 5 — Install the pre-commit hook
+## Step 6 — Install the pre-commit hook
 
 ```bash
 bash tools/hooks/install.sh
@@ -104,7 +129,7 @@ until somebody remembers to run the generator.
 
 Verify it took: the script prints `linked:` or `copied:` for `pre-commit`.
 
-## Step 6 — Remove the example entity
+## Step 7 — Remove the example entity
 
 Do this **last**, and only after the user confirms — up to this point the example is
 what makes the tools return something visible.
@@ -115,13 +140,15 @@ rm context/tasks/sprint-2026-W32.md
 python tools/tasks/regen.py
 ```
 
-Then remove its row from `context/projects/_index.md`.
+Then remove its row from `context/projects/_index.md`, and delete the
+`template_example_entity` key from `tools/tasks/schema.yaml` — it exists only to say
+"this knowledge base has not been set up yet", and that stops being true here.
 
 Re-run the linter afterwards. It should report `0 findings` with **0 entities scanned**
 — and that count is the point: it tells the user the knowledge base is empty rather than
 misconfigured. As soon as they add a real entity, the number moves.
 
-## Step 7 — Hand over
+## Step 8 — Hand over
 
 Tell the user, in a few lines:
 
@@ -134,5 +161,5 @@ Tell the user, in a few lines:
 
 - Do **not** edit any `.py` file. Everything here is configuration.
 - Do **not** commit on the user's behalf unless they ask.
-- Do **not** delete the example entity before step 6, and never without confirmation.
+- Do **not** delete the example entity before step 7, and never without confirmation.
 - Do **not** invent owner ids, scope names, or thresholds. Ask.

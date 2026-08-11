@@ -12,9 +12,9 @@ for a reply" with no subject is useless.
 | 🔴 | Sign-off on the export format | **bob** — reviewing since 2026-08-04 |
 
 <!-- AUTO:START -->
-| State | Task | Owner | Due |
-|:---:|---|---|---|
-| 🟡 | [Inventory the export — what the outgoing file carries](tasks/inventory-the-export.md) | Alice | 2026-08-14 |
-| 🔴 | [Agree the export format with the reviewer](tasks/agree-the-export-format.md) | Bob | — |
-| ⚪ | [Draft the onboarding note for new contributors](tasks/draft-onboarding-note.md) | shared | — |
+| ID | State | Task | Owner | Due |
+|---|:---:|---|---|---|
+| `REPO-1` | 🟡 | [Inventory the export — what the outgoing file carries](tasks/inventory-the-export.md) | Alice | 2026-08-14 |
+| `REPO-2` | 🔴 | [Agree the export format with the reviewer](tasks/agree-the-export-format.md) | Bob | — |
+| `REPO-3` | ⚪ | [Draft the onboarding note for new contributors](tasks/draft-onboarding-note.md) | shared | — |
 <!-- AUTO:END -->

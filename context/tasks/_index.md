@@ -6,18 +6,26 @@
 <!-- AUTO:START -->
 ## Live tasks
 
-| Entity | Task | Owner | State | Priority | Due | Sprint |
-|---|---|---|:---:|---|---|:---:|
-| EXAMPLE_PROJECT | [Inventory the export — what the outgoing file carries](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md) | Alice | 🟡 | high | 2026-08-14 | ✓ |
-| EXAMPLE_PROJECT | [Agree the export format with the reviewer](../projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md) | Bob | 🔴 | high | — | ✓ |
-| EXAMPLE_PROJECT | [Draft the onboarding note for new contributors](../projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md) | shared | ⚪ | normal | — | — |
+| ID | Entity | Task | Owner | State | Priority | Due | Sprint |
+|---|---|---|---|:---:|---|---|:---:|
+| `REPO-1` | EXAMPLE_PROJECT | [Inventory the export — what the outgoing file carries](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md) | Alice | 🟡 | high | 2026-08-14 | ✓ |
+| `REPO-2` | EXAMPLE_PROJECT | [Agree the export format with the reviewer](../projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md) | Bob | 🔴 | high | — | ✓ |
+| `REPO-3` | EXAMPLE_PROJECT | [Draft the onboarding note for new contributors](../projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md) | shared | ⚪ | normal | — | — |
 
 ## Groups
 
 ### export-review
 
-- 🟡 [Inventory the export — what the outgoing file carries](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md) — EXAMPLE_PROJECT, Alice, due 2026-08-14
-- 🔴 [Agree the export format with the reviewer](../projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md) — EXAMPLE_PROJECT, Bob, due —
+- 🟡 `REPO-1` [Inventory the export — what the outgoing file carries](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md) — EXAMPLE_PROJECT, Alice, due 2026-08-14
+- 🔴 `REPO-2` [Agree the export format with the reviewer](../projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md) — EXAMPLE_PROJECT, Bob, due —
 
-> 3 live, 0 to archive · active sprint: 2026-W32 · generated 2026-08-05
+## ID → path
+
+| ID | Path |
+|---|---|
+| `REPO-1` | `context/projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md` |
+| `REPO-2` | `context/projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md` |
+| `REPO-3` | `context/projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md` |
+
+> 3 live, 0 to archive · active sprint: 2026-W32 · generated 2026-08-11
 <!-- AUTO:END -->

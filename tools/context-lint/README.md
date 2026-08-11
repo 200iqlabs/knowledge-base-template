@@ -51,10 +51,12 @@ ERROR is present, `2` on a dependency/config failure.
 | 7 | `extraction` | WARN | File in `communication/` with `extracted: false` or no frontmatter. |
 | 8 | `status-size` | WARN | `status.md` longer than the threshold (default 80 lines), counted **without** the generated `AUTO` section — a long task list is not the author's to shorten. |
 | 9 | `structure` | ERROR | Missing required file (`status.md`, `catalog.md`, `project.md`, …) per the folder template. |
-| 10 | `task-header` | ERROR | Task file with a missing required field, an `owner`/`status`/`priority` outside the allowed set, `status: blocked` without `blocked_by`, `status: done` without `closed`, a `sprint` field (belongs to the sprint file), or a non-ISO date. |
-| 11 | `sprint` | ERROR | More than one sprint file with `status: active`; link in an active sprint pointing at a missing task file. |
+| 10 | `task-header` | ERROR | Task file with a missing required field (`id` among them), an `id` not matching `<id_prefix>-<number>`, an `owner`/`status`/`priority` outside the allowed set, `status: blocked` without `blocked_by`, `status: done` without `closed`, a `sprint` field (belongs to the sprint file), or a non-ISO date. |
+| 11 | `sprint` | ERROR | More than one sprint file with `status: active`; entry in an active sprint that is not `- <ID> — <Title>`; entry naming an id absent from the registry; entry whose copied title no longer matches the task's `title`. |
 | 12 | `task-overdue` | WARN | Task whose `due` has passed and whose `status` is not `done`. |
 | 13 | `manual-task` | ERROR | `⚪` or `🟡` table row in `status.md` outside the `AUTO` section — a task written by hand instead of created in `tasks/`. The legend naming both icons in prose is not flagged; only table rows are. |
+| 14 | `task-id` | ERROR | Two task files carrying the same `id`. **Scans `_archive/` as well**, unlike every other check: archiving does not return a number to the pool, so a new task reusing an archived id is a real collision. An identifier that has left the repository must keep pointing at one thing. |
+| 15 | `task-id` | ERROR | `id_prefix` still set to the template's own default. Skipped while the template's example entity is still on disk (`template_example_entity` in the schema) — a fresh clone must not greet its first user with an error about a value the template shipped. |
 
 ## Scopes
 
@@ -67,7 +69,8 @@ Two shapes, because a knowledge base usually has both:
   applies, in its file variant. Empty by default.
 - **`task_registry`** — `context/tasks/`, which is not an entity: no `status.md`, no
   `catalog.md`, no row in any `_index.md`. Checks #10 and #12 run over the company-level
-  task files, #11 over the sprint files. Runs once per lint, not per entity.
+  task files, #11 over the sprint files, #14 and #15 over the whole repository. Runs once
+  per lint, not per entity.
 
 A file-shaped entity has no `status.md` and no `catalog.md` by design — its state lives
 in a field inside the file — so the folder-shaped checks would only produce noise. What
@@ -100,9 +103,9 @@ All paths, thresholds, patterns, and exceptions live in `config.yaml`:
 - `deliverables_comm_exceptions` — process docs whose name merely contains `mail`/`wa`
   but which are genuine deliverables (check #6 false positives).
 - `task_registry.schema` — path to `tools/tasks/schema.yaml`, which owns the task
-  contract (required fields, allowed `owner`/`status`/`priority` values, forbidden
-  fields, directory layout). `tools/tasks/regen.py` reads the same file, so checks
-  #10–#12 and the generator can never disagree about what a valid task is.
+  contract (required fields, `id_prefix`, allowed `owner`/`status`/`priority` values,
+  forbidden fields, directory layout). `tools/tasks/regen.py` reads the same file, so
+  checks #10–#12, #14–#15 and the generator can never disagree about what a valid task is.
 
 ## Determinism
 

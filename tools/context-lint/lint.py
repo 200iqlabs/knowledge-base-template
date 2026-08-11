@@ -67,6 +67,14 @@ AUTO_START = "<!-- AUTO:START -->"
 AUTO_END = "<!-- AUTO:END -->"
 # checks #8, #13: markers that belong to the generated section only
 TASK_ICONS = ("⚪", "🟡")
+# check #11: a sprint entry is `- <ID> — <Title>`. Same shape as the generator's, kept
+# here rather than imported — the linter is deliberately standalone, and the two tools
+# already validate task headers side by side for the same reason.
+SPRINT_ENTRY_RE = re.compile(r"^-\s+(?P<id>[A-Z][A-Z0-9]*-\d+)\s+—\s+(?P<title>.+)$")
+SPRINT_HEAD_RE = re.compile(r"^-\s+(?P<id>[A-Z][A-Z0-9]*-\d+)\b")
+# check #15: the prefix the template ships with. Not a value belonging to any repository
+# using it — a repository still carrying it has not been through the setup command.
+PLACEHOLDER_ID_PREFIX = "REPO"
 # markdown link target: [text](target)
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 # frontmatter 'updated:' value or body 'Last updated:' value
@@ -430,6 +438,10 @@ def validate_task_file(abspath: str, tcfg: dict, today: _dt.date, findings: list
         if not fm.get(field):
             findings.append(Finding("ERROR", "task-header", rel(abspath),
                                     f"required field `{field}` is missing"))
+    task_id = fm.get("id")
+    if task_id and not re.fullmatch(rf"{re.escape(str(tcfg['id_prefix']))}-\d+", str(task_id)):
+        findings.append(Finding("ERROR", "task-header", rel(abspath),
+                                f"`id: {task_id}` does not match `{tcfg['id_prefix']}-<number>`"))
     for field, allowed in (("owner", tcfg["owners"]), ("status", tcfg["statuses"]),
                            ("priority", tcfg["priorities"])):
         value = fm.get(field)
@@ -471,6 +483,66 @@ def iter_task_files(tasks_dir: str, tcfg: dict):
         yield p
 
 
+def all_task_dirs(tcfg: dict) -> list[str]:
+    """Every directory a task may live in: the registry plus one per entity."""
+    dirs = [os.path.join(REPO_ROOT, tcfg["registry_path"])]
+    for root in tcfg.get("entity_roots") or []:
+        base = os.path.join(REPO_ROOT, root)
+        if not os.path.isdir(base):
+            continue
+        for name in sorted(os.listdir(base)):
+            d = os.path.join(base, name, tcfg["entity_dir_name"])
+            if os.path.isdir(d):
+                dirs.append(d)
+    return [d for d in dirs if os.path.isdir(d)]
+
+
+def collect_ids(tcfg: dict) -> dict[str, list[tuple[str, str]]]:
+    """id → [(path, title)] across the whole repository, `_archive/` included.
+
+    The archive is scanned here and nowhere else on purpose: archiving does not return
+    a number to the pool, so a new task reusing an archived id is a real collision. An
+    identifier that has left the repository must keep pointing at one thing forever.
+    """
+    out: dict[str, list[tuple[str, str]]] = {}
+    for tasks_dir in all_task_dirs(tcfg):
+        paths = list(iter_task_files(tasks_dir, tcfg))
+        archive = os.path.join(tasks_dir, tcfg.get("archive_dir") or "_archive")
+        paths += list(iter_task_files(archive, tcfg))
+        for p in paths:
+            fm = parse_frontmatter(read_text(p)) or {}
+            if fm.get("id"):
+                out.setdefault(str(fm["id"]), []).append((p, str(fm.get("title") or "")))
+    return out
+
+
+def check_id_uniqueness(ids: dict[str, list[tuple[str, str]]], findings: list[Finding]) -> None:
+    """#14 the same id claimed by more than one file."""
+    for task_id, entries in sorted(ids.items()):
+        if len(entries) > 1:
+            for p, _ in entries:
+                others = ", ".join(rel(q) for q, _ in entries if q != p)
+                findings.append(Finding("ERROR", "task-id", rel(p),
+                                        f"id `{task_id}` is also used by: {others}"))
+
+
+def check_id_prefix(tcfg: dict, findings: list[Finding]) -> None:
+    """#15 the template's own prefix left in place in a repository that is in use.
+
+    Gated on the example entity: while it is still there, nobody has run the setup
+    command, and a fresh clone of the template must not greet its first user with an
+    error about a value the template itself shipped.
+    """
+    example = tcfg.get("template_example_entity")
+    if example and os.path.isdir(os.path.join(REPO_ROOT, example)):
+        return
+    if str(tcfg.get("id_prefix")) == PLACEHOLDER_ID_PREFIX:
+        findings.append(Finding("ERROR", "task-id", tcfg.get("schema") or "task_registry.schema",
+                                f"`id_prefix` is still the template default `{PLACEHOLDER_ID_PREFIX}` — "
+                                "run the setup command's prefix step; identifiers stop telling "
+                                "repositories apart while every one of them ships the same one"))
+
+
 def check_entity_tasks(entity: str, cfg: dict, today: _dt.date, findings: list[Finding]) -> None:
     """#10, #12 for tasks owned by an entity."""
     tcfg = cfg.get("task_registry")
@@ -481,10 +553,16 @@ def check_entity_tasks(entity: str, cfg: dict, today: _dt.date, findings: list[F
 
 
 def check_task_registry(cfg: dict, today: _dt.date, findings: list[Finding]) -> None:
-    """#10, #12 for company-level tasks and #11 sprint integrity. Runs once per run."""
+    """#10, #12 for company-level tasks, #11 sprint integrity, #14 id uniqueness,
+    #15 placeholder prefix. Runs once per run."""
     tcfg = cfg.get("task_registry")
     if not tcfg:
         return
+    check_id_prefix(tcfg, findings)
+    ids = collect_ids(tcfg)
+    check_id_uniqueness(ids, findings)
+    titles = {task_id: entries[0][1] for task_id, entries in ids.items()}
+
     base = os.path.join(REPO_ROOT, tcfg["registry_path"])
     if not os.path.isdir(base):
         return
@@ -504,13 +582,24 @@ def check_task_registry(cfg: dict, today: _dt.date, findings: list[Finding]) -> 
             findings.append(Finding("ERROR", "sprint", rel(p),
                                     f"more than one active sprint ({len(active)}) — exactly one may carry status: active"))
     for p in active:
-        for target in MD_LINK_RE.findall(read_text(p)):
-            t = target.strip().split("#", 1)[0]
-            if not t or t.startswith(("http://", "https://", "mailto:")) or not t.endswith(".md"):
+        for line in read_text(p).splitlines():
+            stripped = line.strip()
+            if not SPRINT_HEAD_RE.match(stripped):
                 continue
-            if not os.path.exists(os.path.normpath(os.path.join(base, t))):
+            m = SPRINT_ENTRY_RE.match(stripped)
+            if not m:
                 findings.append(Finding("ERROR", "sprint", rel(p),
-                                        f"dead link to a task: {t}"))
+                                        f"entry is not `- <ID> — <Title>`: {stripped[:70]}"))
+                continue
+            task_id, title = m.group("id"), m.group("title").strip()
+            if task_id not in titles:
+                findings.append(Finding("ERROR", "sprint", rel(p),
+                                        f"`{task_id}` is not a task in the registry"))
+                continue
+            if title != titles[task_id].strip():
+                findings.append(Finding("ERROR", "sprint", rel(p),
+                                        f"`{task_id}` title out of date — sprint says {title!r}, "
+                                        f"the task says {titles[task_id].strip()!r}"))
 
 
 def check_freshness(entity: str, cfg: dict, today: _dt.date, findings: list[Finding]) -> None:

@@ -2,21 +2,25 @@
 """
 Report generator — prints the task report for one person, on demand.
 
-Five sections, in order:
+Six sections, in order:
   1. Overdue        — due < today, status != done
   2. Due today      — due == today
-  3. Sprint, rest   — remaining tasks linked from the active sprint
+  3. Sprint, rest   — remaining tasks listed in the active sprint
   4. Blocked        — 🔴 rows from the manual part of every status.md
-  5. Quiet          — entities with no commit for longer than the threshold
+  5. From outside   — task files a session in another repository has written to
+  6. Quiet          — entities with no commit for longer than the threshold
 
 Section titles come from the schema (`report_labels`), not from this file: the
 report is what a human reads every morning, so its language is configuration.
 
-Sections 1–3 are filtered to one owner (plus `wspolne`, which is everyone's). Sections
-4 and 5 are not: a blocker on the other cofounder is exactly what you want to see, and
-an entity gone quiet belongs to nobody in particular. They are also the only reason the
-report reads anything outside the registry — a task file never knows that we are waiting
-on an outside party, and status.md does.
+Sections 1–3 are filtered to one owner (plus the schema's `shared_owner`, which is
+everyone's). Sections
+4–6 are not: a blocker on the other cofounder is exactly what you want to see, an entity
+gone quiet belongs to nobody in particular, and a task changed from outside needs to be
+noticed by whoever is about to commit — not only by its owner. They are also the only
+reason the report reads anything outside the registry: a task file never knows that we
+are waiting on an outside party (status.md does), nor that it has uncommitted changes
+(git does).
 
 The report is ephemeral by design: it prints to stdout and is not committed. It reads the
 working directory, so it shows what is on disk right now, pushed or not.
@@ -61,9 +65,45 @@ def task_line(task: dict) -> str:
     href = link_from(today_file(), task["path"])
     due = L["task_due"].format(due=task["due"]) if task.get("due") else L["task_no_due"]
     return (
-        f"- {STATUS_ICON[task['status']]} **{task['entity']}** · [{task['title']}]({href}) "
+        f"- {STATUS_ICON[task['status']]} `{task['id']}` **{task['entity']}** "
+        f"· [{task['title']}]({href}) "
         f"— {regen.OWNER_LABEL.get(task['owner'], task['owner'])}, {task['priority']}, {due}"
     )
+
+
+def uncommitted_paths() -> set[Path]:
+    """Files git reports as changed in the working directory, resolved to absolute paths.
+
+    This is how a change made from another repository becomes visible. That session
+    writes and stops — it never commits, because several sessions work here at once and
+    a commit from a process blind to the working directory would sweep up somebody
+    else's staged work.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=regen.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    out = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        # A rename is reported as `old -> new`; only the destination exists on disk.
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        out.add((regen.REPO_ROOT / path.strip().strip('"')).resolve())
+    return out
+
+
+def touched_from_outside(tasks: list[dict]) -> list[dict]:
+    changed = uncommitted_paths()
+    return [t for t in tasks if t["path"].resolve() in changed]
 
 
 def blocked_rows() -> list[tuple[str, str]]:
@@ -118,11 +158,19 @@ def silent_entities(today: date, threshold: int) -> list[tuple[str, int]]:
 
 
 def render(today: date, threshold: int, owner: str) -> str:
-    tasks = [t for t in collect_tasks() if t.get("status") in regen.LIVE_STATUSES]
+    # Collected once, unfiltered: the sprint resolves identifiers against every task in
+    # the registry, not against the slice belonging to one person.
+    all_tasks = collect_tasks()
+    sprint_file, linked = read_active_sprint(all_tasks)
+
+    tasks = [t for t in all_tasks if t.get("status") in regen.LIVE_STATUSES]
     if owner != "all":
-        # `wspolne` belongs to both of us, so it shows up in either person's report.
-        tasks = [t for t in tasks if t.get("owner") in (owner, "wspolne")]
-    sprint_file, linked = read_active_sprint()
+        # The shared owner belongs to everybody, so it shows up in every person's report.
+        # Read from the contract, never hardcoded: the id differs per repository, and a
+        # literal here would quietly drop the shared tasks in all the others.
+        shared = regen.SCHEMA.get("shared_owner")
+        keep = {owner} | ({shared} if shared else set())
+        tasks = [t for t in tasks if t.get("owner") in keep]
 
     overdue, due_today, rest = [], [], []
     for t in sorted(tasks, key=sort_key):
@@ -163,6 +211,19 @@ def render(today: date, threshold: int, owner: str) -> str:
         L["blocked_heading"],
         [f"- **{entity}** · {row}" for entity, row in blocked_rows()],
         L["blocked_empty"],
+    )
+
+    section(
+        L["external_heading"],
+        [
+            L["external_line"].format(
+                id=t["id"],
+                title=t["title"],
+                status=f"{STATUS_ICON[t['status']]} {t['status']}",
+            )
+            for t in touched_from_outside(all_tasks)
+        ],
+        L["external_empty"],
     )
 
     section(

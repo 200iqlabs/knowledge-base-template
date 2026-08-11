@@ -1,6 +1,6 @@
 # Task registry — conventions
 
-> **Last updated:** 2026-08-05
+> **Last updated:** 2026-08-11
 > **Review cycle:** whenever the conventions change
 
 This directory is the root of the task registry: it holds organisation-wide tasks that
@@ -31,6 +31,7 @@ context/tasks/
 
 ```markdown
 ---
+id: REPO-1
 title: "Inventory the export — what the outgoing file carries"
 owner: alice
 status: todo
@@ -56,7 +57,18 @@ How we will know the task is closed.
 
 Leave empty fields empty or delete them — the generator treats both the same way. The
 filename is a kebab-case slug of the title: `inventory-the-export.md`. No date, no
-number.
+number — **the id does not go into the filename**. Putting it there would create a second
+copy of the identifier that a `git mv` could contradict, and the whole point of the field
+is that nothing about the file's location can contradict it.
+
+**Get the id from the generator**, never by counting rows in the index:
+
+```bash
+python tools/tasks/regen.py --next-id      # → REPO-143
+```
+
+It answers with the highest number ever handed out plus one, `_archive/` included.
+Archiving does not return a number to the pool.
 
 **Always quote `title`.** Without quotes, a title starting with `[` is read by YAML as a
 list, and a colon inside one (`Production probe: phrases…`) breaks the field mapping.
@@ -73,12 +85,14 @@ status: active
 ---
 # Sprint 2026-W32
 
-- [Inventory the export](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md)
-- [Draft the onboarding note](../projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md)
+- REPO-1 — Inventory the export — what the outgoing file carries
+- REPO-2 — Draft the onboarding note
 ```
 
 Header: `sprint` (ISO week identifier), `from`, `to` (ISO dates), `status`
-(`active` | `closed`). Body: **only a list of links**, with relative paths to task files.
+(`active` | `closed`). Body: **only task entries**, one per line, in the form
+`- <ID> — <Title>`. A line that is not an entry (a note, a checklist) is left alone, so
+long as it does not open with something id-shaped.
 
 Three things a sprint file does not contain:
 
@@ -88,11 +102,17 @@ Three things a sprint file does not contain:
 | a `sprint` field on the task side | only this file |
 | the backlog | defined negatively — see below |
 
+The title *is* repeated here, and it is the one duplicate this repository tolerates: a
+sprint listing bare identifiers cannot be read by a human at all. It is tolerated only
+because it is checked — the linter compares each entry's title against the task's `title`
+field and reports the divergence as an ERROR. When a task is retitled, the sprint entry
+is retitled with it; the id stays as it was.
+
 **One active sprint for the whole repo.** No per-project or per-client sprints — a small
 team has one pool of attention per week. A sprint links tasks from any entities at once.
 
-**The backlog has no file and no field.** A task is in the backlog when no link from the
-active sprint points at it. Adding to the sprint = adding a line here; removing from the
+**The backlog has no file and no field.** A task is in the backlog when no entry in the
+active sprint names it. Adding to the sprint = adding a line here; removing from the
 sprint = deleting a line. The task file is not touched either way.
 
 ## Groups
@@ -111,17 +131,19 @@ Once a week, before planning the next one. The order matters — archive before 
 history, because the `🟢` rows are written from the `done` files.
 
 1. **Archive** — `git mv` the files with `status: done` into `<entity>/tasks/_archive/`
-   (organisation-wide tasks → `context/tasks/_archive/`). This step is **on demand**: if
-   you skip it one week, the `done` tasks simply stay in `tasks/` and wait — the index
-   keeps them in a separate "closed, awaiting archiving" section, so nothing is lost.
+   (organisation-wide tasks → `context/tasks/_archive/`). The header is not edited: the
+   id survives archiving unchanged, and its number stays spoken for. This step is
+   **on demand**: if you skip it one week, the `done` tasks simply stay in `tasks/` and
+   wait — the index keeps them in a separate "closed, awaiting archiving" section, so
+   nothing is lost.
 2. **History** — for each archived task, add a `🟢` row to the `status.md` of its
    entity, dated from the `closed` field.
 3. **Close** — set `status: closed` in the sprint file being closed.
 4. **New sprint** — create `sprint-<YYYY>-W<WW>.md` with `status: active` for the coming
    week.
-5. **Carry-overs** — unfinished tasks either get a link in the new sprint or are
+5. **Carry-overs** — unfinished tasks either get an entry in the new sprint or are
    deliberately left out and return to the backlog. Leaving one out does not change the
-   task file.
+   task file, and a carried-over task keeps the id it already had.
 6. **Regenerate and commit** — the pre-commit hook recomputes `_index.md` and the `AUTO`
    sections.
 
@@ -136,10 +158,16 @@ exchange for nothing.
 
 There is exactly one price for keeping everything, and it is paid by a reading rule:
 **`_archive/` is in the "do NOT read" class**, alongside `archive/`, `output/` and
-`communication/`. The generator skips it, the linter does not check it, the index does
-not list it, and an agent working on an entity does not look there on its own initiative.
-Otherwise, after a year, entering any project would mean reading a hundred closed matters
-to reach the five open ones.
+`communication/`. The generator skips it, the index does not list it, and an agent
+working on an entity does not look there on its own initiative. Otherwise, after a year,
+entering any project would mean reading a hundred closed matters to reach the five open
+ones.
+
+One exception, and it reads exactly one field: **id uniqueness** (lint check #14, and the
+generator's `--next-id`) scans `_archive/` too. Archiving does not return a number to the
+pool, so a new task reusing an archived id would be a real collision — and an identifier
+that has already left the repository has to keep pointing at one thing. Nothing else in
+those files is read.
 
 Access is on demand only — a question like "what did we close in April", "what were we
 working on in sprint W29", "have we done anything with export metadata yet". Then the
@@ -149,7 +177,7 @@ agent reads `_archive/` and answers.
 
 | File | Generator | Trigger |
 |---|---|---|
-| `_index.md` | `tools/tasks/regen.py` | pre-commit hook on changes to `**/tasks/*.md`, plus manually |
+| `_index.md` (live tasks, groups, `ID → path`) | `tools/tasks/regen.py` | pre-commit hook on changes to `**/tasks/*.md`, plus manually |
 | the `AUTO` section of an entity's `status.md` | `tools/tasks/regen.py` | same |
 | the `/today` report | `tools/tasks/regen_today.py` | on demand, printed into the session |
 

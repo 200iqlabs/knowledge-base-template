@@ -1,4 +1,5 @@
 ---
+id: REPO-3
 title: "Draft the onboarding note for new contributors"
 owner: shared
 status: todo

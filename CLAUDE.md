@@ -133,12 +133,25 @@ the user explicitly asks about closing history. Moving `done` tasks into `_archi
 an **on-demand** step, not an automatic one.
 
 The filename is a kebab-case slug of the title, with no date prefix and no number. The
-slug is the identifier — references use a relative path, not a separate ID.
+slug makes the file findable by a human; it does **not** identify the task.
+
+**The identifier is the `id` field.** It is allocated once and never changes — not when
+the title changes, not on a `git mv` between entities, not on archiving, and numbers are
+never reused. The path cannot do that job: it changes the moment a task moves, and it
+means nothing at all to a session working in a different repository. So the id is what
+you quote when referring to a task — in a sprint file, in a prompt, in a message.
+
+The prefix comes from `id_prefix` in the task contract and differs per repository, which
+is what lets two registries hand work to each other without their numbers colliding.
+Allocation is `max(number) + 1` across every task in the repository, `_archive/`
+included: `python tools/tasks/regen.py --next-id`. There is no counter file — a counter
+would be a merge-conflict magnet in a repository worked on from several sessions at once.
 
 ### Header
 
 ```yaml
 ---
+id: REPO-142            # allocated once, never changed
 title: "Inventory the export — what the outgoing file carries"   # always quoted
 owner: alice            # values come from schema.yaml
 status: todo            # todo | open | blocked | done
@@ -152,9 +165,9 @@ closed:                 # required when status: done
 ---
 ```
 
-Required: `title`, `owner`, `status`, `priority`, `created`. The rest is optional, with
-two conditions: `blocked` without `blocked_by`, and `done` without `closed`, are lint
-errors.
+Required: `id`, `title`, `owner`, `status`, `priority`, `created`. The rest is optional,
+with two conditions: `blocked` without `blocked_by`, and `done` without `closed`, are
+lint errors.
 
 `status` has a **closed list of four values** matching the `status.md` legend: `todo`
 (⚪), `open` (🟡), `blocked` (🔴), `done` (🟢). There is no fifth state.
@@ -170,9 +183,14 @@ generator and the linter read. Change them there.
 ### Sprint and backlog
 
 One active sprint **for the whole repository**: `context/tasks/sprint-<YYYY>-W<WW>.md`.
-The file holds a header and **only a list of links** to task files — it does not repeat
-state, owner, or due date. A task has no `sprint` field; membership lives only in the
-sprint file.
+The file holds a header and **only a list of task entries**, one per line, in the form
+`- <ID> — <Title>` — it does not repeat state, owner, or due date. A task has no `sprint`
+field; membership lives only in the sprint file.
+
+The title in an entry is a copy of the task's `title`, kept for one reason: a list of
+bare identifiers is unreadable. The copy is safe because the linter compares it against
+the task and reports any divergence — a duplicate nobody verifies is a duplicate that
+drifts, which is exactly what the "one home per fact" rule guards against.
 
 **The backlog is defined negatively:** the backlog is every live task the active sprint
 does not link to. There is no separate file and no backlog field.
@@ -187,18 +205,55 @@ Conventions, templates, and the sprint-closing ritual:
 
 | File | Contents | When it is produced |
 |---|---|---|
-| `context/tasks/_index.md` | every live task from every entity | pre-commit hook on changes to `**/tasks/*.md`, plus manually |
+| `context/tasks/_index.md` | every live task from every entity, plus the `ID → path` table | pre-commit hook on changes to `**/tasks/*.md`, plus manually |
 | the `AUTO` section of an entity's `status.md` | that entity's live tasks | same |
 
 Generator: `tools/tasks/regen.py`. Content between the `AUTO` markers is never edited by
 hand.
 
+### Tasks handed to a session in another repository
+
+Work is often started here and carried out somewhere else — a session opened in the
+product repository, a separate project, another machine. That session needs to report
+back, and the id is what makes that possible.
+
+**Outgoing content carries a contract block.** Whatever goes out — a prompt, a message, a
+briefing file — states the task's id, the absolute path to this repository's root, and
+the rules below. It has to stand on its own: the reader must not have to open this file
+to update a task correctly. Verify the id is unique *before* it leaves — after that it
+cannot be corrected without cost.
+
+**The outside session resolves the id through the `ID → path` table** in
+`context/tasks/_index.md`. It does not guess a path from the entity name and does not
+search `tasks/` directories by content. An id absent from that table means: change
+nothing, say so in the result.
+
+**It may change `status`, `closed` and `blocked_by`, and append a report** under a
+`## Reports from outside` heading — dated, naming the repository, linking the artefact on
+its side. Existing reports are never overwritten. It may not touch `id`, `title`,
+`owner`, `priority`, `created`, `due` or the group field: those belong to planning, which
+happens here. `owner` additionally has a different set of allowed values in every
+repository.
+
+**It writes and stops — no `git add`, no `git commit`, no `git push`.** Several sessions
+work in this repository at once and each stages only its own scope; a commit from a
+process blind to the working directory would sweep up somebody else's. The change becomes
+visible through the "touched from outside" section of the `/today` report and through
+plain `git status`, and is committed by a session working here.
+
+**The direction is asymmetric, deliberately.** A read-only rule on some other repository
+("never write there") is not a rule against this channel: here it is *that* session
+writing into *this* repository, which no rule forbids. Read the asymmetry as written, not
+symmetrically — read symmetrically, it blocks the only way a result ever comes back.
+
 ### Report — `/today`
 
 `/today [owner|all]` prints a report into the session: overdue, due today, the rest of
-the sprint, external blockers taken from `status.md`, and entities quiet for longer than
-the threshold. The task sections are filtered to the named person plus every shared
-task; blockers and quiet entities are not filtered.
+the sprint, external blockers taken from `status.md`, tasks touched from outside
+(uncommitted changes in task files), and entities quiet for longer than the threshold.
+The task sections are filtered to the named person plus every shared task; blockers,
+outside changes and quiet entities are not filtered — a change written by another
+repository has to be noticed by whoever is about to commit, not only by its owner.
 
 **The report is personal and ephemeral.** It is not committed, not sent to anyone, and
 reads the working directory — so a task created a minute ago is already in it. Everyone
