@@ -304,6 +304,16 @@ def next_id(ids: dict[str, list[Path]] | None = None) -> str:
     return f"{ID_PREFIX}-{highest + 1}"
 
 
+def candidate_count() -> int:
+    """How many files look like tasks, before any of them is validated."""
+    return sum(
+        1
+        for tasks_dir in find_task_dirs()
+        for f in tasks_dir.glob("*.md")
+        if is_task_file(f)
+    )
+
+
 def collect_tasks() -> list[dict]:
     tasks = []
     for tasks_dir in find_task_dirs():
@@ -552,6 +562,24 @@ def main() -> int:
         return 0
 
     tasks = collect_tasks()
+
+    # Wrong-contract guard. Every task failing validation at once is not a repository in
+    # a bad state — it is this tool pointed at the wrong `--schema`, and the damage is
+    # silent: without this, the run would rewrite the index to "no live tasks" and every
+    # entity's AUTO section to empty, then exit 0. Reported once, before anything is
+    # written, and it exits non-zero even without --strict: the operator ran it wrong.
+    candidates = candidate_count()
+    if candidates and not tasks:
+        print(
+            f"[!] {candidates} task file(s) found, none valid under "
+            f"{Path(args.schema or DEFAULT_SCHEMA)} — nothing written.\n"
+            "    This is almost always the wrong contract. The generator ships a neutral\n"
+            "    default beside itself; a repository in use passes its own:\n"
+            "      python <path>/regen.py --schema tools/tasks/schema.yaml",
+            file=sys.stderr,
+        )
+        return 1
+
     check_id_uniqueness(scan_ids())
     sprint_file, linked = read_active_sprint(tasks)
 

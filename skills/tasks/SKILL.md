@@ -149,16 +149,26 @@ rules loaded, and it must not have to go looking for them.
       Leave `id`, `title`, `owner`, `priority`, `created`, `due` and the group field
       exactly as they are.
    3. Append a report at the end of the file, under a `## Reports from outside` heading
-      (create the heading if it is not there; never overwrite an existing entry):
+      — that exact heading, so a second report has somewhere to go. Create it if it is
+      not there; never overwrite an existing entry:
 
       ### <YYYY-MM-DD> · <repository name>
       <what was done, in two or three sentences>
       Artefact: <link to the PR, commit, or change on your side>
 
-   4. Do NOT run `git add`, `git commit` or `git push` in that repository. Leave the
+   4. Do NOT run that repository's generators or linters. Its boards are rebuilt by a
+      session working there, which knows how to invoke them. Your job ends at the task
+      file.
+
+   5. Do NOT run `git add`, `git commit` or `git push` in that repository. Leave the
       change in the working directory — somebody working there will commit it with the
       rest of that entity's scope.
    ```
+
+   Step 4 is not tidiness. Those generators take a contract as an argument and ship a
+   neutral default beside themselves; invoked without it, they judge every real task
+   invalid. A session that reaches for one because it seems helpful is reaching for a
+   tool it has no way to invoke correctly.
 
 4. **Check the direction of any access rule you are about to quote.** A repository this
    one may only read is still allowed to write back here; that rule constrains outgoing
