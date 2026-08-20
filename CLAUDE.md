@@ -381,6 +381,42 @@ Naming: `YYYY-MM-DD-topic-slug.md`.
 > an artefact belonging to one entity → `<ENTITY>/output/`. Neither is ever renamed into
 > the other.
 
+## The scope of a correction is the scope the user named
+
+When the user points at specific items and asks for a fix, **the fix touches those items
+and nothing else.** Named three files out of twelve? Three change. Named a group ("the
+overdue ones", "everything for Bob")? That group changes, in full, and the rest is left
+alone.
+
+This holds even when the same flaw plainly affects the untouched items too. Say so — one
+sentence, naming what else looks affected and why you left it — and let the user decide.
+Widening the fix yourself is not thoroughness, for two reasons that outlast any single
+task:
+
+1. **It destroys the review the user already did.** A user who names three of twelve has
+   usually read all twelve and approved nine. Rewriting the nine discards that judgement
+   silently, and the next review has to start from zero because nothing distinguishes
+   "approved" from "regenerated behind your back".
+2. **It hides the fix inside the noise.** The user asked for a small diff so they could
+   check it. A large one cannot be checked at the same cost, so it gets waved through —
+   which is the opposite of what asking for the correction was for.
+
+Volume is not the test — **provenance is**. Changing a shared rule that the user did name
+is in scope even when it touches many files. Regenerating one file they did not name is
+out of scope even though it is smaller.
+
+**Example.** The user reviews six draft summaries and writes: *"the ones for Alice repeat
+the opening paragraph — redo those."* In scope: every summary owned by Alice. Out of
+scope: the other summaries, their opening paragraphs, and the template that generated all
+six. If the template is the real cause, the correct move is to fix Alice's summaries and
+say that the template looks like the source — not to regenerate all six from a changed
+template.
+
+The rule has one exception, and it is narrow: a change **mechanically required** to make
+the requested one coherent — a rule elsewhere in the repository that would now contradict
+it. Make that change as small as it can be, and report it in the same breath as the work,
+never silently.
+
 ## Session Hygiene (`/lint`, `/close-session`)
 
 Two tools with disjoint roles. The split is deliberate: the linter is meant to be a
