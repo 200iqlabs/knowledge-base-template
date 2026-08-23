@@ -49,7 +49,7 @@ ERROR is present, `2` on a dependency/config failure.
 | 5 | `inbox` | WARN | Non-empty `inbox/` — reminder to run `/ingest`. |
 | 6 | `comm-place` | ERROR | Sent-message file (`*-mail-*`, `*-wa-*`, `*-linkedin-*`, …) sitting in `deliverables/`. |
 | 7 | `extraction` | WARN | File in `communication/` with `extracted: false` or no frontmatter. |
-| 8 | `status-size` | WARN | `status.md` longer than the threshold (default 80 lines), counted **without** the generated `AUTO` section — a long task list is not the author's to shorten. |
+| 8 | `status-size` | WARN | `status.md` longer than the threshold (default 80 lines), counted **without** the generated `AUTO` section — a long task list is not the author's to shorten. **Backstop for #16**: it reacts to bulk, #16 to the number of closed rows. |
 | 9 | `structure` | ERROR | Missing required file (`status.md`, `catalog.md`, `project.md`, …) per the folder template. |
 | 10 | `task-header` | ERROR | Task file with a missing required field (`id` among them), an `id` not matching `<id_prefix>-<number>`, an `owner`/`status`/`priority` outside the allowed set, `status: blocked` without `blocked_by`, `status: done` without `closed`, a `sprint` field (belongs to the sprint file), or a non-ISO date. |
 | 11 | `sprint` | ERROR | More than one sprint file with `status: active`; entry in an active sprint that is not `- <ID> — <Title>`; entry naming an id absent from the registry; entry whose copied title no longer matches the task's `title`. |
@@ -57,12 +57,13 @@ ERROR is present, `2` on a dependency/config failure.
 | 13 | `manual-task` | ERROR | `⚪` or `🟡` table row in `status.md` outside the `AUTO` section — a task written by hand instead of created in `tasks/`. The legend naming both icons in prose is not flagged; only table rows are. |
 | 14 | `task-id` | ERROR | Two task files carrying the same `id`. **Scans `_archive/` as well**, unlike every other check: archiving does not return a number to the pool, so a new task reusing an archived id is a real collision. An identifier that has left the repository must keep pointing at one thing. |
 | 15 | `task-id` | ERROR | `id_prefix` still set to the template's own default. Skipped while the template's example entity is still on disk (`template_example_entity` in the schema) — a fresh clone must not greet its first user with an error about a value the template shipped. |
+| 16 | `status-closed-rows` | WARN | More `🟢` rows in the hand-written part of `status.md` than `status_closed_rows_kept` (default 10) — `/close-session` should age the surplus into `<ENTITY>/status_archive.md`. Only the first table cell counts, so the icon appearing inside a row's text is not a second closure. |
 
 ## Scopes
 
 Two shapes, because a knowledge base usually has both:
 
-- **`scan_roots`** — entities are folders. Checks #1–#10, #12 and #13 apply.
+- **`scan_roots`** — entities are folders. Checks #1–#10, #12, #13 and #16 apply.
   Configured in `config.yaml`; the template ships with `context/projects`.
   An empty scan root is not an error.
 - **`file_scopes`** — entities are single `.md` files, no folder. **Only check #2**
@@ -95,7 +96,10 @@ All paths, thresholds, patterns, and exceptions live in `config.yaml`:
 
 - `scan_roots` — folder-shaped scopes, each with required files and index name.
 - `file_scopes` — file-shaped scopes (check #2 only).
-- `thresholds` — `freshness_days`, `status_max_lines`.
+- `thresholds` — `freshness_days`, `status_max_lines`, `status_closed_rows_kept` (how
+  many `🟢` rows `status.md` keeps before `/close-session` moves the rest into
+  `status_archive.md`; default 10, read with a fallback so a config predating check #16
+  still runs).
 - `self_index_marker` — filename that marks a self-cataloguing subtree.
 - `communication_patterns` — filename markers for check #6.
 - `catalog_exclude_dirs`, `date_prefix_dirs`, `structural_files`, `freshness_files`.

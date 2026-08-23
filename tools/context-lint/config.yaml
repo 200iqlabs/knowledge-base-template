@@ -20,8 +20,10 @@ scan_roots:
 file_scopes: []
 
 thresholds:
-  freshness_days: 30      # check #4: warn when 'updated:' / 'Last updated' is older
-  status_max_lines: 80    # check #8: warn when status.md exceeds this many lines
+  freshness_days: 30            # check #4: warn when 'updated:' / 'Last updated' is older
+  status_max_lines: 80          # check #8: warn when status.md exceeds this many lines
+  status_closed_rows_kept: 10   # check #16: how many 🟢 rows status.md keeps before
+                                # /close-session ages the rest into status_archive.md
 
 # check #6: filename substrings that mark a sent message living in the wrong place.
 # A file named like a message belongs in communication/, not in deliverables/.
@@ -58,6 +60,7 @@ communication_dir: communication
 # Structural files that are never catalogued content (skipped by check #1).
 structural_files:
   - status.md
+  - status_archive.md
   - catalog.md
   - project.md
   - README.md

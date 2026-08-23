@@ -96,8 +96,23 @@ Three roles, **never three copies of state**:
   state spelled out; that is what `status.md` is for.
 
 Do not guess 🟡 vs 🔴 — when the material does not say whose side the ball is on, ask.
-If `status.md` has passed the line threshold from `tools/context-lint/config.yaml`,
-propose condensing the 🟢 items.
+
+**Age the closed rows out.** Count the `| 🟢` rows outside the `AUTO` section, then:
+
+1. Over `status_closed_rows_kept` (`tools/context-lint/config.yaml`, default 10) → move
+   the **oldest surplus** rows, by the date column, oldest first, into
+   `<ENTITY>/status_archive.md`. Create the file when missing: title
+   `# <ENTITY> — Status archive`, one line saying it holds closed rows aged out of
+   `status.md` and is **not read** unless somebody asks about closing history, the 🟢
+   legend — then `## YYYY-MM` sections newest first, each carrying the same table header
+   as the closed table in `status.md`, rows newest first inside the month.
+2. Rows move **verbatim** — no rewriting, no merging, no re-dating.
+3. A remaining row that is a paragraph rather than a headline (roughly, over 400
+   characters) → propose condensing it to a headline plus a link into `data/`, and act
+   only **with the user's approval** — the Step 5 rule, applied to `status.md`.
+4. Update `Last updated` in both files, and leave the `AUTO` section untouched.
+5. Backstop: if the hand-written part is still over `status_max_lines` afterwards, say so
+   and propose what else to condense. Do not condense it unasked.
 
 ---
 
@@ -184,11 +199,14 @@ play → skip this step **silently**.
   `_index.md` files.
 - Does **NOT** change `status: draft` to `sent` in `communication/` — a finished draft
   stays a draft until a human sends it.
+- Does **NOT** archive 🔴 rows — they are live state, not closing history — and does
+  **NOT** edit rows already sitting in `status_archive.md`.
 - A problem in a folder outside the scope → report it, do not fix it.
 
 ## References
 
 - Lint: `tools/context-lint/` (`README.md` = the check catalogue, `config.yaml` =
   thresholds and exceptions).
-- Conventions: `CLAUDE.md` → `Status Protocol`, `Communication Files`,
-  `Commit Convention`, `Session Hygiene`.
+- Conventions: `CLAUDE.md` → `Status Protocol` (the `status_archive.md` rule and the
+  closed-row threshold live there), `Communication Files`, `Commit Convention`,
+  `Session Hygiene`.

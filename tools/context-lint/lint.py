@@ -67,6 +67,9 @@ AUTO_START = "<!-- AUTO:START -->"
 AUTO_END = "<!-- AUTO:END -->"
 # checks #8, #13: markers that belong to the generated section only
 TASK_ICONS = ("⚪", "🟡")
+# check #16: the closed marker. Counted in the first cell of a hand-written table row —
+# the same icon inside a row's text is prose, not a second closed item.
+CLOSED_ICON = "🟢"
 # check #11: a sprint entry is `- <ID> — <Title>`. Same shape as the generator's, kept
 # here rather than imported — the linter is deliberately standalone, and the two tools
 # already validate task headers side by side for the same reason.
@@ -410,6 +413,36 @@ def check_status_size(entity: str, cfg: dict, findings: list[Finding]) -> None:
                                         f"status.md has {n} hand-written lines (>{limit}) — condense or archive"))
 
 
+def check_status_closed_rows(entity: str, cfg: dict, findings: list[Finding]) -> None:
+    """#16 closed (🟢) rows piling up in status.md instead of ageing into the archive.
+
+    The size threshold (#8) is a backstop and reacts late: one row that grew into a
+    paragraph trips it, while forty short closures do not. The agent reads status.md in
+    full every time, so the row count is the thing worth bounding.
+
+    `.get` with a default on purpose — a config written before this check existed must
+    keep working rather than crash the whole run on a missing key.
+    """
+    limit = cfg["thresholds"].get("status_closed_rows_kept", 10)
+    for dirpath, dirnames, filenames in os.walk(entity):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        if "status.md" not in filenames:
+            continue
+        p = os.path.join(dirpath, "status.md")
+        n = 0
+        for line in manual_lines(read_text(p)):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                continue
+            first_cell = stripped.strip("|").split("|", 1)[0].strip()
+            if first_cell == CLOSED_ICON:
+                n += 1
+        if n > limit:
+            findings.append(Finding("WARN", "status-closed-rows", rel(p),
+                                    f"{n} closed rows in status.md (>{limit}) — run "
+                                    "/close-session to age them into status_archive.md"))
+
+
 def check_manual_tasks(entity: str, findings: list[Finding]) -> None:
     """#13 hand-written ⚪/🟡 row outside the generated section."""
     for dirpath, dirnames, filenames in os.walk(entity):
@@ -677,6 +710,7 @@ def run(config: dict, scope: str | None, today: _dt.date) -> list[Finding]:
             check_names(entity, config, findings)
             check_comm_in_deliverables(entity, config, findings)
             check_status_size(entity, config, findings)
+            check_status_closed_rows(entity, config, findings)
             check_freshness(entity, config, today, findings)
             check_inbox(entity, findings)
             check_extraction(entity, config, findings)

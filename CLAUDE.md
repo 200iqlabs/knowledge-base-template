@@ -18,6 +18,7 @@ a customer, a partnership. Each entity is a folder under a scope root
 | Path | What lives there | Reading rule |
 |---|---|---|
 | `<ENTITY>/status.md` | state of play | read **in full, first** (see `Status Protocol`) |
+| `<ENTITY>/status_archive.md` | closed (🟢) rows aged out of `status.md`. Optional | **do NOT read** unless the user asks about closing history |
 | `<ENTITY>/inbox/` | drop zone for raw incoming files | processed, not read directly |
 | `<ENTITY>/data/` | processed, durable knowledge | read freely |
 | `<ENTITY>/deliverables/` | work made **for** the recipient, in Markdown | read when needed |
@@ -102,9 +103,22 @@ This is part of the definition of "done": a task is not finished until the recor
 been written. A `🟢` row in `status.md` for a registry task appears when the sprint is
 closed, not when the `status` field changes.
 
-`status.md` should fit on one screen — **a threshold of 80 lines, counted excluding the
-`AUTO` section**. Past that, condense the closed items or move them into `data/`, so the
-file never has to be truncated when read.
+### Closed rows age out — `status_archive.md`
+
+`status.md` keeps the **newest N closed (🟢) rows** — N is `status_closed_rows_kept` in
+the lint config, default 10. Older closed rows are moved by `/close-session` into
+`<ENTITY>/status_archive.md`: the same table format, grouped by month, newest first. The
+80-line threshold stays as a **backstop** (lint check #8), and check #16 warns on the row
+count itself. `🔴` rows are **never** archived — they are live state, not history.
+
+A closed row is a **headline with a link** to the `data/` file that holds the detail, not
+the detail itself. A row that has grown into a paragraph is condensed at close-session,
+**with the user's approval** — never silently.
+
+Why the harness enforces this rather than the reader: the agent reads `status.md` **in
+full** every time, so a board nobody prunes spends context on last month's closures on
+every single question. The archive stays on disk — "what did we close in April" is a real
+question, it is simply not one that has to be answered on every read.
 
 ## Task Registry
 

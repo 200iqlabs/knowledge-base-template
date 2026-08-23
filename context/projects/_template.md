@@ -8,6 +8,7 @@ you actually have something to put in them.
 context/projects/<PROJECT>/
   project.md         # the anchor: what this is, who is involved, current phase
   status.md          # state of play — the only source of truth about state
+  status_archive.md  # closed rows aged out of status.md — do NOT read unless asked
   catalog.md         # map of this entity's files
   data/              # processed, durable knowledge
   deliverables/      # work made FOR the recipient, in Markdown
