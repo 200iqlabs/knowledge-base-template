@@ -99,7 +99,7 @@ Do not guess 🟡 vs 🔴 — when the material does not say whose side the ball
 
 **Age the closed rows out.** Count the `| 🟢` rows outside the `AUTO` section, then:
 
-1. Over `status_closed_rows_kept` (`tools/context-lint/config.yaml`, default 10) → move
+1. Over `status_closed_rows_kept` (`tools/context-lint/config.yaml`) → move
    the **oldest surplus** rows, by the date column, oldest first, into
    `<ENTITY>/status_archive.md`. Create the file when missing: title
    `# <ENTITY> — Status archive`, one line saying it holds closed rows aged out of
@@ -107,9 +107,10 @@ Do not guess 🟡 vs 🔴 — when the material does not say whose side the ball
    legend — then `## YYYY-MM` sections newest first, each carrying the same table header
    as the closed table in `status.md`, rows newest first inside the month.
 2. Rows move **verbatim** — no rewriting, no merging, no re-dating.
-3. A remaining row that is a paragraph rather than a headline (roughly, over 400
-   characters) → propose condensing it to a headline plus a link into `data/`, and act
-   only **with the user's approval** — the Step 5 rule, applied to `status.md`.
+3. A remaining row that is a paragraph rather than a headline — longer than
+   `status_row_max_chars` in the same config, which is what lint check #17 flags →
+   propose condensing it to a headline plus a link into `data/`, and act only **with the
+   user's approval** — the Step 5 rule, applied to `status.md`.
 4. Update `Last updated` in both files, and leave the `AUTO` section untouched.
 5. Backstop: if the hand-written part is still over `status_max_lines` afterwards, say so
    and propose what else to condense. Do not condense it unasked.

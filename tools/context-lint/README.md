@@ -57,13 +57,14 @@ ERROR is present, `2` on a dependency/config failure.
 | 13 | `manual-task` | ERROR | `⚪` or `🟡` table row in `status.md` outside the `AUTO` section — a task written by hand instead of created in `tasks/`. The legend naming both icons in prose is not flagged; only table rows are. |
 | 14 | `task-id` | ERROR | Two task files carrying the same `id`. **Scans `_archive/` as well**, unlike every other check: archiving does not return a number to the pool, so a new task reusing an archived id is a real collision. An identifier that has left the repository must keep pointing at one thing. |
 | 15 | `task-id` | ERROR | `id_prefix` still set to the template's own default. Skipped while the template's example entity is still on disk (`template_example_entity` in the schema) — a fresh clone must not greet its first user with an error about a value the template shipped. |
-| 16 | `status-closed-rows` | WARN | More `🟢` rows in the hand-written part of `status.md` than `status_closed_rows_kept` (default 10) — `/close-session` should age the surplus into `<ENTITY>/status_archive.md`. Only the first table cell counts, so the icon appearing inside a row's text is not a second closure. |
+| 16 | `status-closed-rows` | WARN | More `🟢` rows in the hand-written part of `status.md` than `status_closed_rows_kept` — `/close-session` should age the surplus into `<ENTITY>/status_archive.md`. Only the first table cell counts, so the icon appearing inside a row's text is not a second closure. |
+| 17 | `status-row-length` | WARN | A single `🟢` row in `status.md` longer than `status_row_max_chars` — a closed row is a headline plus a link into `data/`, and this one grew into a paragraph. Complements #16: that one bounds how many closed rows a board keeps, this one how much each costs to read. Only `status.md` — a long row in `status_archive.md` costs nothing, since nothing loads the archive by default. One finding per row, capped at five per file with the remainder summarised in one line. |
 
 ## Scopes
 
 Two shapes, because a knowledge base usually has both:
 
-- **`scan_roots`** — entities are folders. Checks #1–#10, #12, #13 and #16 apply.
+- **`scan_roots`** — entities are folders. Checks #1–#10, #12, #13, #16 and #17 apply.
   Configured in `config.yaml`; the template ships with `context/projects`.
   An empty scan root is not an error.
 - **`file_scopes`** — entities are single `.md` files, no folder. **Only check #2**
@@ -98,8 +99,10 @@ All paths, thresholds, patterns, and exceptions live in `config.yaml`:
 - `file_scopes` — file-shaped scopes (check #2 only).
 - `thresholds` — `freshness_days`, `status_max_lines`, `status_closed_rows_kept` (how
   many `🟢` rows `status.md` keeps before `/close-session` moves the rest into
-  `status_archive.md`; default 10, read with a fallback so a config predating check #16
-  still runs).
+  `status_archive.md`) and `status_row_max_chars` (how long any one of those rows may
+  get). Both are read with a fallback, so a config predating check #16 or #17 still
+  runs instead of crashing on a missing key. The shipped values are in `config.yaml`
+  with the reasoning that set them — this list does not repeat the numbers.
 - `self_index_marker` — filename that marks a self-cataloguing subtree.
 - `communication_patterns` — filename markers for check #6.
 - `catalog_exclude_dirs`, `date_prefix_dirs`, `structural_files`, `freshness_files`.

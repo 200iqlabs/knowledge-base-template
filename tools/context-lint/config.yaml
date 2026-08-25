@@ -22,8 +22,17 @@ file_scopes: []
 thresholds:
   freshness_days: 30            # check #4: warn when 'updated:' / 'Last updated' is older
   status_max_lines: 80          # check #8: warn when status.md exceeds this many lines
-  status_closed_rows_kept: 10   # check #16: how many 🟢 rows status.md keeps before
-                                # /close-session ages the rest into status_archive.md
+  status_closed_rows_kept: 15   # check #16: how many 🟢 rows status.md keeps before
+                                # /close-session ages the rest into status_archive.md.
+                                # A row is not a day — a busy day closes several at once,
+                                # so a count of 10 can mean two days rather than two weeks.
+                                # 15 buys roughly a fortnight of living board.
+  status_row_max_chars: 1000    # check #17: how long a single 🟢 row may get. A closed
+                                # row is a headline with a link into data/, and length is
+                                # what it actually costs to read. Calibrated on a real
+                                # board: median 356, p75 933 — so 1000 lets three
+                                # quarters through and catches the ones that grew into a
+                                # paragraph. Tighten later once the outliers are gone.
 
 # check #6: filename substrings that mark a sent message living in the wrong place.
 # A file named like a message belongs in communication/, not in deliverables/.

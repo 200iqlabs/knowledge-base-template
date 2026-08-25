@@ -106,14 +106,19 @@ closed, not when the `status` field changes.
 ### Closed rows age out — `status_archive.md`
 
 `status.md` keeps the **newest N closed (🟢) rows** — N is `status_closed_rows_kept` in
-the lint config, default 10. Older closed rows are moved by `/close-session` into
+the lint config, default 15. Older closed rows are moved by `/close-session` into
 `<ENTITY>/status_archive.md`: the same table format, grouped by month, newest first. The
 80-line threshold stays as a **backstop** (lint check #8), and check #16 warns on the row
 count itself. `🔴` rows are **never** archived — they are live state, not history.
 
+A row is not a day: a busy day closes several at once, so a count set to keep "about two
+weeks" has to be read as rows, not as dates.
+
 A closed row is a **headline with a link** to the `data/` file that holds the detail, not
-the detail itself. A row that has grown into a paragraph is condensed at close-session,
-**with the user's approval** — never silently.
+the detail itself. Its **length** is watched by check #17, against
+`status_row_max_chars` in the same config — because what a board costs to read is how
+long its rows are, not only how many there are. A row that has grown into a paragraph is
+condensed at close-session, **with the user's approval** — never silently.
 
 Why the harness enforces this rather than the reader: the agent reads `status.md` **in
 full** every time, so a board nobody prunes spends context on last month's closures on
