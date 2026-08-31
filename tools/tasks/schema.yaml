@@ -113,6 +113,10 @@ report_labels:
   blocked_empty: "Nothing is waiting on an outside party."
   blocked_waiting_on: "waiting on"
   blocked_unnamed: "party not named"
+  # A task carrying `status: blocked`. The section reads two sources — hand-written 🔴
+  # rows and task files — because a task waiting on somebody appears in the report
+  # nowhere else: it is excluded from the two current sections by design.
+  blocked_task_line: "- **{entity}** · `{id}` {title} — {waiting_on}: {who}"
   # Tasks a session in another repository has written to. They land in the working
   # directory uncommitted, so without this section they would be invisible until
   # somebody happened to run `git status`.

@@ -6,7 +6,7 @@ Six sections, in order:
   1. Overdue        — due < today, status != done
   2. Due today      — due == today, or a window (start..due) covering today
   3. In play        — start <= today with no due date
-  4. Blocked        — 🔴 rows from the manual part of every status.md
+  4. Blocked        — 🔴 rows from every status.md, plus tasks with status: blocked
   5. From outside   — task files a session in another repository has written to
   6. Quiet          — entities with no commit for longer than the threshold
 
@@ -20,6 +20,13 @@ A task with `status: blocked` is excluded from sections 2 and 3: waiting on an o
 party is not work to do. It stays in section 1 when its due date has passed, though — a
 missed deadline on something you are waiting for is the signal to escalate, and is
 exactly what must not be swallowed.
+
+Section 4 is what keeps the rest of them visible. It reads **two sources**: the
+hand-written 🔴 rows, and the task files themselves. Without the second, a blocked task
+whose entity has no matching 🔴 row appears in no section of the report at all — excluded
+from 2 and 3 by the rule above, and not overdue yet. The two sources can describe the
+same wait twice; that duplication is the known inconsistency between board rows and task
+state, and showing it beats hiding a task nobody is tracking.
 
 Section titles come from the schema (`report_labels`), not from this file: the
 report is what a human reads every morning, so its language is configuration.
@@ -120,6 +127,27 @@ def uncommitted_paths() -> set[Path]:
 def touched_from_outside(tasks: list[dict]) -> list[dict]:
     changed = uncommitted_paths()
     return [t for t in tasks if t["path"].resolve() in changed]
+
+
+def blocked_tasks(tasks: list[dict]) -> list[str]:
+    """Rendered lines for every task carrying `status: blocked`.
+
+    Unfiltered by owner, like the rest of this section: a colleague's blocker is exactly
+    what the person about to plan their day needs to see.
+    """
+    L = regen.SCHEMA["report_labels"]
+    out = []
+    for t in sorted(tasks, key=lambda x: (x["entity"].lower(), str(x["id"]))):
+        if t.get("status") != "blocked":
+            continue
+        out.append(L["blocked_task_line"].format(
+            entity=t["entity"],
+            id=t["id"],
+            title=t["title"],
+            waiting_on=L["blocked_waiting_on"],
+            who=str(t.get("blocked_by") or L["blocked_unnamed"]).strip(),
+        ))
+    return out
 
 
 def blocked_rows() -> list[tuple[str, str]]:
@@ -233,7 +261,8 @@ def render(today: date, threshold: int, owner: str) -> str:
 
     section(
         L["blocked_heading"],
-        [f"- **{entity}** · {row}" for entity, row in blocked_rows()],
+        [f"- **{entity}** · {row}" for entity, row in blocked_rows()]
+        + blocked_tasks(all_tasks),
         L["blocked_empty"],
     )
 

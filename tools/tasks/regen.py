@@ -60,6 +60,7 @@ REPORT_LABEL_KEYS = (
     "overdue_heading", "overdue_empty", "today_heading", "today_empty",
     "inplay_heading", "inplay_empty",
     "blocked_heading", "blocked_empty", "blocked_waiting_on", "blocked_unnamed",
+    "blocked_task_line",
     "external_heading", "external_empty", "external_line",
     "silence_heading", "silence_empty", "silence_line",
     "task_due", "task_no_due", "task_start", "footer",
