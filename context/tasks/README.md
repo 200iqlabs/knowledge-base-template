@@ -139,9 +139,13 @@ process that cannot be derived from the data — if a routine set `start` by its
 three months the field would mean "an algorithm thought so" rather than "I decided", and
 the in-play section would stop being a commitment.
 
-The review file is committed (a scheduled process has no other way to hand back a result)
-and deleted in the same commit that carries its proposals into the task files. The `_`
-prefix keeps it out of the generator's and the linter's scan, exactly like `_index.md`.
+The routine writes the file and stops — it does not commit. Several sessions work in this
+repository at once and each stages only its own scope; a commit from a process blind to
+the working directory would sweep up somebody else's work. The file simply appears in the
+working tree, the way a task changed from another repository does, and is committed by a
+session working here — then deleted in the same commit that carries its proposals into the
+task files. The `_` prefix keeps it out of the generator's and the linter's scan, exactly
+like `_index.md`.
 
 Tasks with `status: blocked` are skipped: something waiting on an outside party is not
 something to take up.
