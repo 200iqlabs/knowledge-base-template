@@ -380,19 +380,30 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def _method_not_allowed(self) -> None:
-        body = b"405 Method Not Allowed - this view only reads.\n"
-        self.send_response(405)
-        self.send_header("Allow", "GET, HEAD")
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
+        self._respond(
+            405,
+            b"405 Method Not Allowed - this view only reads.\n",
+            "text/plain; charset=utf-8",
+            extra={"Allow": "GET, HEAD"},
+        )
 
-    def _respond(self, status: int, body: bytes, ctype: str = "text/html; charset=utf-8") -> None:
+    def _respond(
+        self,
+        status: int,
+        body: bytes,
+        ctype: str = "text/html; charset=utf-8",
+        extra: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # A task page carries client names, amounts and the substance of commercial
+        # commitments. Loopback keeps that off the network; this keeps it off the disk,
+        # where a browser cache would otherwise leave copies nobody thinks to clear.
+        # Same header, for the same reason, as tools/proto-foto/gallery.py.
+        self.send_header("Cache-Control", "no-store")
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
