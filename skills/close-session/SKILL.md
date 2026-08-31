@@ -2,7 +2,8 @@
 name: close-session
 description: "Session-closing ritual — detect the scope from git, extract decisions from
   communication/ and from the conversation into status.md/data/, update the three index
-  files (status/catalog/_index), run the linter and fix ERRORs inside the scope, review
+  files (status/catalog/_index), archive the tasks closed in the scope, run the linter and
+  fix ERRORs inside the scope, review
   stale data with the user's approval, summarise, and commit once per scope using the
   scope table in CLAUDE.md. Triggers on '/close-session', 'close the session', 'wrap up',
   'close this entity', 'commit per scope'. Sends no messages, creates no deliverables,
@@ -83,9 +84,33 @@ The content stays in `communication/` — nothing is deleted. Full convention:
 
 ---
 
-## Step 3 — Update the three index files
+## Step 3 — Archive the closed tasks, then update the three index files
 
-Three roles, **never three copies of state**:
+**Archive first.** The `🟢` rows are written from the `done` files, so moving them has to
+happen before the board is written, not after.
+
+For every entity in the detected scope, take the task files with `status: done` and a
+filled `closed` field, and:
+
+1. `git mv <entity>/tasks/<slug>.md <entity>/tasks/_archive/` — organisation-wide tasks
+   go to the registry's own `_archive/`. The header is **not** edited: the id survives
+   archiving unchanged, and its number stays spoken for.
+2. Add a `🟢` row to that entity's `status.md`, dated from the `closed` field. A row is a
+   headline plus a link into `data/`, not the detail itself.
+
+**This step does not ask.** The decision was made when the task was marked `done`; asking
+again is an empty click. That is what separates it from Step 5, where the decision is
+still open and the user's approval is the point.
+
+**Only the entities in scope.** A task closed during this session is a changed file in its
+own entity, so that entity is in scope by definition and the limit costs nothing day to
+day. It bites only on closures left over from earlier sessions — and archiving those would
+produce commits touching entities this session never opened, which is exactly what makes
+`git log -- <path>` untrustworthy as a trace of what happened. Leftovers outside the scope
+stay where they are; the index keeps them in its "closed, awaiting archiving" section, and
+the session that touches those entities next will archive them.
+
+Then the three roles, **never three copies of state**:
 
 - **`status.md`** — the only source of truth. Flip rows according to what happened in
   the session: what shipped, what was sent, where the ball went. Legend: 🟢 DONE ·
@@ -202,6 +227,8 @@ play → skip this step **silently**.
   stays a draft until a human sends it.
 - Does **NOT** archive 🔴 rows — they are live state, not closing history — and does
   **NOT** edit rows already sitting in `status_archive.md`.
+- Does **NOT** archive `done` tasks belonging to entities outside the detected scope,
+  even when it can see them waiting.
 - A problem in a folder outside the scope → report it, do not fix it.
 
 ## References

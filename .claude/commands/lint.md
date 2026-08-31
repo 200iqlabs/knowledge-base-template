@@ -20,7 +20,7 @@ Run the context-lint consistency checker and report findings. Argument (optional
 
 2. Summarize the findings for the user, **ERROR-first**:
    - Lead with the count: `N ERROR, M WARN`.
-   - Group ERRORs by check (`catalog`, `index`, `structure`, `comm-place`, `task-header`, `sprint`, `manual-task`) and list the offending paths concisely. These block a clean close.
+   - Group ERRORs by check (`catalog`, `index`, `structure`, `comm-place`, `task-header`, `task-window`, `manual-task`) and list the offending paths concisely. These block a clean close.
    - Then WARNs by check (`freshness`, `inbox`, `extraction`, `naming`, `status-size`, `task-overdue`) — advisory.
    - `manual-task` in bulk means a `status.md` still holds hand-written ⚪/🟡 rows that belong in `tasks/` — report it as one migration item per entity, not as N separate findings.
    - If the exit code is `2`, relay the dependency/config message verbatim (most likely missing PyYAML → `pip install pyyaml`).

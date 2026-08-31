@@ -1,5 +1,5 @@
 ---
-description: Show the task report for right now — overdue, due today, rest of the sprint, external blockers, quiet entities
+description: Show the task report for right now — overdue, due today, in play with no due date, external blockers, quiet entities
 ---
 
 Task report from the registry. Argument (optional — an owner id from `tools/tasks/schema.yaml`, or `all`; defaults to the schema's `default_owner`): $ARGUMENTS
@@ -43,7 +43,7 @@ Task report from the registry. Argument (optional — an owner id from `tools/ta
 
 ## What is filtered
 
-Sections 1–3 (overdue, due today, sprint) show the named person's tasks plus every
+Sections 1–3 (overdue, due today, in play) show the named person's tasks plus every
 shared task. Sections 4–5 (external blockers, quiet entities) are **not filtered** — a
 blocker sitting with a colleague is exactly what you want to see, and an entity that has
 gone quiet belongs to nobody in particular.

@@ -73,7 +73,6 @@ return a visible result.
 
 ```bash
 git rm -r context/projects/EXAMPLE_PROJECT
-rm context/tasks/sprint-2026-W32.md
 python tools/tasks/regen.py
 ```
 

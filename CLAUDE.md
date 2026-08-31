@@ -100,8 +100,8 @@ in **exactly one place**:
   hand-written part of `status.md`.
 
 This is part of the definition of "done": a task is not finished until the record has
-been written. A `🟢` row in `status.md` for a registry task appears when the sprint is
-closed, not when the `status` field changes.
+been written. A `🟢` row in `status.md` for a registry task appears at session close, in
+the archiving step, not when the `status` field changes.
 
 ### Closed rows age out — `status_archive.md`
 
@@ -145,11 +145,13 @@ content.
 File-shaped scopes have **no** `tasks/` directory — work concerning such an entity
 belongs to the registry of whichever project runs it.
 
-`tasks/_archive/` holds tasks closed in past sprints. **Do NOT read** — the same rule as
-for `archive/`, `output/` and `communication/`. Keep it **indefinitely** (it is plain
-text, and "what did we close in April" is a real question), but reach for it only when
-the user explicitly asks about closing history. Moving `done` tasks into `_archive/` is
-an **on-demand** step, not an automatic one.
+`tasks/_archive/` holds tasks that are closed and archived. **Do NOT read** — the same
+rule as for `archive/`, `output/` and `communication/`. Keep it **indefinitely** (it is
+plain text, and "what did we close in April" is a real question), but reach for it only
+when the user explicitly asks about closing history. Moving `done` tasks into `_archive/`
+happens **at session close, automatically and without asking**, for the entities that
+session touched — the decision was made when the task was marked `done`, and asking again
+is an empty click. Entities outside the session's scope are left alone.
 
 The filename is a kebab-case slug of the title, with no date prefix and no number. The
 slug makes the file findable by a human; it does **not** identify the task.
@@ -158,7 +160,7 @@ slug makes the file findable by a human; it does **not** identify the task.
 the title changes, not on a `git mv` between entities, not on archiving, and numbers are
 never reused. The path cannot do that job: it changes the moment a task moves, and it
 means nothing at all to a session working in a different repository. So the id is what
-you quote when referring to a task — in a sprint file, in a prompt, in a message.
+you quote when referring to a task — in a prompt, in a message, in a report.
 
 The prefix comes from `id_prefix` in the task contract and differs per repository, which
 is what lets two registries hand work to each other without their numbers colliding.
@@ -176,6 +178,7 @@ owner: alice            # values come from schema.yaml
 status: todo            # todo | open | blocked | done
 priority: high          # urgent | high | normal | low
 created: 2026-08-04
+start: 2026-08-06       # optional — the day it was picked up
 due: 2026-08-14         # optional
 blocked_by:             # required when status: blocked — who or what
 group: compliance-o1    # optional — groups tasks across entities
@@ -199,26 +202,40 @@ The allowed values, the field names, and where task directories may live are **n
 repeated in this file** — they live in `tools/tasks/schema.yaml`, which both the
 generator and the linter read. Change them there.
 
-### Sprint and backlog
+### The window a task is current in
 
-One active sprint **for the whole repository**: `context/tasks/sprint-<YYYY>-W<WW>.md`.
-The file holds a header and **only a list of task entries**, one per line, in the form
-`- <ID> — <Title>` — it does not repeat state, owner, or due date. A task has no `sprint`
-field; membership lives only in the sprint file.
+Whether a task is **current** is answered by two dates in the task's own header, and by
+nothing else. There is no list of what is in play, so there is nothing to keep in step
+with anything.
 
-The title in an entry is a copy of the task's `title`, kept for one reason: a list of
-bare identifiers is unreadable. The copy is safe because the linter compares it against
-the task and reports any divergence — a duplicate nobody verifies is a duplicate that
-drifts, which is exactly what the "one home per fact" rule guards against.
+| `start` | `due` | What it means |
+|---|---|---|
+| set, not in the future | set, not in the past | current — you are inside the window |
+| set, not in the future | empty | current, open-ended, until the task is `done` |
+| empty | set | not picked up yet; it will still go overdue when the date passes |
+| empty | empty | live and indexed, but current for nobody |
 
-**The backlog is defined negatively:** the backlog is every live task the active sprint
-does not link to. There is no separate file and no backlog field.
+**Picking a task up is writing today's date into `start`.** That is the whole ritual, and
+it is deliberately not "and also invent a due date": a deadline nobody will enforce makes
+every other deadline mean less, and the overdue section stops being worth reading. A task
+with `start` and no `due` stays current until it is closed.
+
+`start` later than `due` is a window nothing can ever be inside. The generator and the
+linter both reject it.
+
+**A task with neither date is not a backlog entry in some second file** — it is simply a
+task nobody has picked up. The daily report leaves it out on purpose, so that the report
+stays a plan for the day rather than a dump of the registry. What brings it back is the
+**monthly pool review**: a routine reads every live task without dates and writes a file
+of proposals — take it up on this date, give it that deadline, or close it as no longer
+relevant. The routine never edits task files. Deciding what to take on is the one thing
+in this process that cannot be derived from the data, and if a routine set `start` by
+itself, the field would come to mean "an algorithm thought so" instead of "I decided".
 
 Thematic grouping (epics, compliance packages) goes through the group field — the group
-view is generated. There are no hand-maintained list files besides sprints.
+view is generated. There are no hand-maintained list files of tasks at all.
 
-Conventions, templates, and the sprint-closing ritual:
-[`context/tasks/README.md`](context/tasks/README.md).
+Conventions and templates: [`context/tasks/README.md`](context/tasks/README.md).
 
 ### What is generated
 
@@ -267,9 +284,12 @@ symmetrically — read symmetrically, it blocks the only way a result ever comes
 
 ### Report — `/today`
 
-`/today [owner|all]` prints a report into the session: overdue, due today, the rest of
-the sprint, external blockers taken from `status.md`, tasks touched from outside
+`/today [owner|all]` prints a report into the session: overdue, due today, in play with
+no due date, external blockers taken from `status.md`, tasks touched from outside
 (uncommitted changes in task files), and entities quiet for longer than the threshold.
+A task with `status: blocked` is left out of the two current sections — waiting on
+somebody else is not work to do — but stays in the overdue one, because a missed deadline
+on something you are waiting for is the signal to escalate.
 The task sections are filtered to the named person plus every shared task; blockers,
 outside changes and quiet entities are not filtered — a change written by another
 repository has to be noticed by whoever is about to commit, not only by its owner.

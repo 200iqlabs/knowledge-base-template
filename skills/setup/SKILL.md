@@ -34,7 +34,7 @@ states. Those strings live in the `labels:` and `report_labels:` blocks of
 
 Ask which language the boards should be in. If it is not English, rewrite the values in
 both blocks — **the keys stay as they are**, only the values change. Placeholders in
-braces (`{live}`, `{done}`, `{sprint}`, `{date}`, `{name}`, `{who}`, `{age}`,
+braces (`{live}`, `{done}`, `{date}`, `{name}`, `{who}`, `{age}`, `{start}`,
 `{days}`, `{due}`, `{stamp}`, `{path}`) must survive verbatim; dropping one turns a
 generated line into a lie or a crash.
 
@@ -136,7 +136,6 @@ what makes the tools return something visible.
 
 ```bash
 git rm -r context/projects/EXAMPLE_PROJECT
-rm context/tasks/sprint-2026-W32.md
 python tools/tasks/regen.py
 ```
 
