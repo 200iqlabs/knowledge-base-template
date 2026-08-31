@@ -77,14 +77,21 @@ Both failures are silent enough to cost you an afternoon.
 
 ## Picking a task up
 
-Write today's date into `start`. That is all of it — there is no list to add a line to,
+Write a date into `start`. That is all of it — there is no list to add a line to,
 because there is no list. The rules for reading the window (`start` / `due`) are in
 [`CLAUDE.md`](../../CLAUDE.md) → **Task Registry**; what matters here is the habit:
 
 ```bash
 # taking REPO-1 on today
 start: 2026-08-31
+
+# taking REPO-2 on from Monday — appears in no section until then
+start: 2026-09-07
 ```
+
+A date in the future is a plan, not a mistake: the task shows up on its own day, without
+anybody having to remember. Filling the field only on the morning you start needs a human
+to remember daily — which is the failure this model exists to remove.
 
 Do **not** invent a `due` at the same time. A task with `start` and no `due` is current
 until it is closed, which is what you actually mean by "I am on this". A deadline nobody

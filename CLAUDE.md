@@ -212,13 +212,23 @@ with anything.
 |---|---|---|
 | set, not in the future | set, not in the past | current — you are inside the window |
 | set, not in the future | empty | current, open-ended, until the task is `done` |
+| **set, in the future** | any | **taken on, from that day** — not current yet, and shown nowhere until it arrives |
 | empty | set | not picked up yet; it will still go overdue when the date passes |
 | empty | empty | live and indexed, but current for nobody |
 
-**Picking a task up is writing today's date into `start`.** That is the whole ritual, and
-it is deliberately not "and also invent a due date": a deadline nobody will enforce makes
-every other deadline mean less, and the overdue section stops being worth reading. A task
-with `start` and no `due` stays current until it is closed.
+**Picking a task up is writing a date into `start`** — today's, if you are starting now.
+That is the whole ritual, and it is deliberately not "and also invent a due date": a
+deadline nobody will enforce makes every other deadline mean less, and the overdue
+section stops being worth reading. A task with `start` and no `due` stays current until
+it is closed.
+
+**A `start` in the future is a plan, and plans are allowed.** Writing next Monday's date
+says "I am taking this on from Monday"; until Monday the task appears in no section of
+the report, and on Monday it appears without anybody having to remember. That is the
+point — the alternative, leaving the field empty and filling it on the day, needs a human
+to remember daily, which is the failure this whole model was built to remove. What a
+future date must not become is a way to look busy: it is a commitment to start, and the
+monthly pool review will find it again if the day passes and nothing happens.
 
 `start` later than `due` is a window nothing can ever be inside. The generator and the
 linter both reject it.
