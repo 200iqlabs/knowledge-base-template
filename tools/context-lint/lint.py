@@ -549,7 +549,16 @@ def validate_task_file(abspath: str, tcfg: dict, today: _dt.date, findings: list
                                 "the window closes before it opens"))
     due = fm.get("due")
     if due and ISO_DATE_RE.match(str(due)) and fm.get("status") != "done":
-        if _dt.date.fromisoformat(str(due)) < today:
+        # The regex accepts a shape, not a date: `2026-13-01` matches it and then blows up
+        # in fromisoformat. A linter that dies on one bad header reports nothing about the
+        # other two hundred files, so the impossible date is a finding, not a traceback.
+        try:
+            expired = _dt.date.fromisoformat(str(due)) < today
+        except ValueError:
+            findings.append(Finding("ERROR", "task-header", rel(abspath),
+                                    f"`due: {due}` is not a real date"))
+            expired = False
+        if expired:
             findings.append(Finding("WARN", "task-overdue", rel(abspath),
                                     f"due {due} has passed, state `{fm.get('status')}`"))
 
@@ -581,14 +590,14 @@ def all_task_dirs(tcfg: dict) -> list[str]:
     return [d for d in dirs if os.path.isdir(d)]
 
 
-def collect_ids(tcfg: dict) -> dict[str, list[tuple[str, str]]]:
-    """id → [(path, title)] across the whole repository, `_archive/` included.
+def collect_ids(tcfg: dict) -> dict[str, list[str]]:
+    """id → [path] across the whole repository, `_archive/` included.
 
     The archive is scanned here and nowhere else on purpose: archiving does not return
     a number to the pool, so a new task reusing an archived id is a real collision. An
     identifier that has left the repository must keep pointing at one thing forever.
     """
-    out: dict[str, list[tuple[str, str]]] = {}
+    out: dict[str, list[str]] = {}
     for tasks_dir in all_task_dirs(tcfg):
         paths = list(iter_task_files(tasks_dir, tcfg))
         archive = os.path.join(tasks_dir, tcfg.get("archive_dir") or "_archive")
@@ -596,16 +605,16 @@ def collect_ids(tcfg: dict) -> dict[str, list[tuple[str, str]]]:
         for p in paths:
             fm = parse_frontmatter(read_text(p)) or {}
             if fm.get("id"):
-                out.setdefault(str(fm["id"]), []).append((p, str(fm.get("title") or "")))
+                out.setdefault(str(fm["id"]), []).append(p)
     return out
 
 
-def check_id_uniqueness(ids: dict[str, list[tuple[str, str]]], findings: list[Finding]) -> None:
+def check_id_uniqueness(ids: dict[str, list[str]], findings: list[Finding]) -> None:
     """#14 the same id claimed by more than one file."""
     for task_id, entries in sorted(ids.items()):
         if len(entries) > 1:
-            for p, _ in entries:
-                others = ", ".join(rel(q) for q, _ in entries if q != p)
+            for p in entries:
+                others = ", ".join(rel(q) for q in entries if q != p)
                 findings.append(Finding("ERROR", "task-id", rel(p),
                                         f"id `{task_id}` is also used by: {others}"))
 
@@ -628,7 +637,7 @@ def check_id_prefix(tcfg: dict, findings: list[Finding]) -> None:
 
 
 def check_entity_tasks(entity: str, cfg: dict, today: _dt.date, findings: list[Finding]) -> None:
-    """#10, #12 for tasks owned by an entity."""
+    """#10, #11, #12 for tasks owned by an entity."""
     tcfg = cfg.get("task_registry")
     if not tcfg:
         return

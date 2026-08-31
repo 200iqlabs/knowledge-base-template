@@ -83,8 +83,8 @@ labels:
   archive_heading: "Closed, awaiting archiving"
   archive_line_closed: "closed"
   status_heading: "## Tasks"
-  status_table_header: "| ID | State | Task | Owner | Due |"
-  status_table_divider: "|---|:---:|---|---|---|"
+  status_table_header: "| ID | State | Task | Owner | Start | Due |"
+  status_table_divider: "|---|:---:|---|---|---|---|"
   status_empty: "No open tasks."
   # The lookup table a session working in another repository reads to turn an id it was
   # handed into a file it can open. Paths are relative to the repo root, POSIX separators,

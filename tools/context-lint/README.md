@@ -64,7 +64,7 @@ ERROR is present, `2` on a dependency/config failure.
 
 Two shapes, because a knowledge base usually has both:
 
-- **`scan_roots`** — entities are folders. Checks #1–#10, #12, #13, #16 and #17 apply.
+- **`scan_roots`** — entities are folders. Checks #1–#13, #16 and #17 apply.
   Configured in `config.yaml`; the template ships with `context/projects`.
   An empty scan root is not an error.
 - **`file_scopes`** — entities are single `.md` files, no folder. **Only check #2**

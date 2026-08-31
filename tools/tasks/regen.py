@@ -51,6 +51,29 @@ LABEL_KEYS = (
     "index_footer",
 )
 
+# The report generator's labels. Validated here, beside the board labels, because both
+# are read from the same contract and a repository that updates the tools without
+# updating its schema would otherwise learn about a missing key from a KeyError in the
+# middle of building somebody's morning report.
+REPORT_LABEL_KEYS = (
+    "title", "subtitle", "everyone",
+    "overdue_heading", "overdue_empty", "today_heading", "today_empty",
+    "inplay_heading", "inplay_empty",
+    "blocked_heading", "blocked_empty", "blocked_waiting_on", "blocked_unnamed",
+    "external_heading", "external_empty", "external_line",
+    "silence_heading", "silence_empty", "silence_line",
+    "task_due", "task_no_due", "task_start", "footer",
+)
+
+# Placeholders each label is rendered with. A contract written for the previous model
+# still carries `{sprint}` in its footer and `| Due | Sprint |` in its index header; the
+# first raises KeyError halfway through rewriting the index, the second renders the right
+# number of columns under the wrong headings — silently, which is worse. Checked at
+# configure() so the operator is told which key to fix, before anything is written.
+LABEL_PLACEHOLDERS = {
+    "index_footer": {"live", "done", "date"},
+}
+
 # Everything below is bound by configure(), never at import time. The repo root is
 # not derived from this file's own location: the generator lives in a template
 # directory that is itself a subtree of the consuming repo, so counting parent
@@ -121,6 +144,23 @@ def configure(root=None, schema_path=None) -> None:
     # Text written into repository files. Missing keys are a broken contract, not a
     # cosmetic gap: a silent default would write English into somebody's board.
     LABELS = dict(SCHEMA["labels"])
+    report_labels = SCHEMA.get("report_labels") or {}
+    stale = []
+    for key, allowed in LABEL_PLACEHOLDERS.items():
+        used = set(re.findall(r"\{(\w+)\}", str(LABELS.get(key, ""))))
+        for name in sorted(used - allowed):
+            stale.append(f"labels.{key}: `{{{name}}}` is not a placeholder this generator fills")
+    if stale:
+        raise SystemExit(
+            "[!] the task contract is written for an older generator:\n    "
+            + "\n    ".join(stale)
+            + "\n    Fix the contract; the generator will not guess what was meant."
+        )
+    missing_report = [k for k in REPORT_LABEL_KEYS if k not in report_labels]
+    if missing_report:
+        raise SystemExit(
+            "[!] missing report label(s) in the task contract: " + ", ".join(missing_report)
+        )
     missing = [k for k in LABEL_KEYS if k not in LABELS]
     if missing:
         raise SystemExit(f"schema: labels missing keys {missing}")
@@ -425,9 +465,14 @@ def render_status_section(tasks: list[dict]) -> str:
     lines = [LABELS["status_table_header"], LABELS["status_table_divider"]]
     for t in sorted(live, key=sort_key):
         href = link_from(t["status_file"], t["path"])
+        # The start date belongs here as much as in the cross-entity index: the Index
+        # Protocol makes this board the read that answers "what is open in this entity",
+        # and without it the board cannot distinguish a task in play from one nobody has
+        # picked up — the very question the window model exists to answer.
         lines.append(
             f"| `{t['id']}` | {STATUS_ICON[t['status']]} | [{link_text(t['title'])}]({href}) "
-            f"| {OWNER_LABEL.get(t['owner'], t['owner'])} | {t.get('due') or '—'} |"
+            f"| {OWNER_LABEL.get(t['owner'], t['owner'])} "
+            f"| {t.get('start') or '—'} | {t.get('due') or '—'} |"
         )
     return "\n".join(lines)
 
