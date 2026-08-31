@@ -226,7 +226,7 @@ def find_task_dirs() -> list[Path]:
         if not path.is_dir() or "_archive" in path.parts:
             continue
         if path.resolve() not in allowed:
-            error(f"{rel(path)}: katalog tasks/ w niedozwolonym miejscu")
+            error(f"{rel(path)}: tasks/ directory somewhere the contract does not allow")
             continue
         found.append(path)
     _task_dirs_cache = sorted(found)
