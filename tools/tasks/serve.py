@@ -339,6 +339,23 @@ def render_not_found(task_id: str) -> bytes:
     return page("No such task", body)
 
 
+def render_bad_path(path: str) -> bytes:
+    """A path with more than one segment is not a failed lookup.
+
+    Answering it with "no task carries this identifier" would state something the view
+    never checked, and send the reader looking for a task rather than at their address
+    bar. The two 404s say different things because they mean different things.
+    """
+    body = (
+        "<h1>Not a task address</h1>"
+        f'<p><code class="path">{html.escape(path)}</code> is not one — a task lives at '
+        "its bare identifier, as in <code class=\"path\">/LABS-244</code>. Nothing was "
+        "looked up.</p>"
+        '<p><a href="/">← back to the registry</a></p>'
+    )
+    return page("Not a task address", body)
+
+
 # ----------------------------------------------------------------------------- serving
 
 
@@ -404,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             task_id = path.strip("/")
             if "/" in task_id:
-                self._respond(404, render_not_found(task_id))
+                self._respond(404, render_bad_path(path))
                 return
             paths = resolve_id(task_id)
             if not paths:
