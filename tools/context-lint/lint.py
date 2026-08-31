@@ -74,11 +74,6 @@ CLOSED_ICON = "🟢"
 # up in one line. Not a knob in config.yaml: it governs how the report reads, not what
 # counts as a problem, and the threshold that does is already configurable.
 ROW_LENGTH_FINDINGS_PER_FILE = 5
-# check #11: a sprint entry is `- <ID> — <Title>`. Same shape as the generator's, kept
-# here rather than imported — the linter is deliberately standalone, and the two tools
-# already validate task headers side by side for the same reason.
-SPRINT_ENTRY_RE = re.compile(r"^-\s+(?P<id>[A-Z][A-Z0-9]*-\d+)\s+—\s+(?P<title>.+)$")
-SPRINT_HEAD_RE = re.compile(r"^-\s+(?P<id>[A-Z][A-Z0-9]*-\d+)\b")
 # check #15: the prefix the template ships with. Not a value belonging to any repository
 # using it — a repository still carrying it has not been through the setup command.
 PLACEHOLDER_ID_PREFIX = "REPO"
@@ -508,7 +503,7 @@ def check_manual_tasks(entity: str, findings: list[Finding]) -> None:
 
 
 def validate_task_file(abspath: str, tcfg: dict, today: _dt.date, findings: list[Finding]) -> None:
-    """#10 task header validity, #12 overdue task."""
+    """#10 task header validity, #11 inverted window, #12 overdue task."""
     fm = parse_frontmatter(read_text(abspath))
     if not fm:
         findings.append(Finding("ERROR", "task-header", rel(abspath),
@@ -538,11 +533,20 @@ def validate_task_file(abspath: str, tcfg: dict, today: _dt.date, findings: list
         if field in fm:
             findings.append(Finding("ERROR", "task-header", rel(abspath),
                                     f"field `{field}` does not belong in a task — {reason}"))
-    for field in ("created", "due", "closed"):
+    for field in ("created", "start", "due", "closed"):
         value = fm.get(field)
         if value and not ISO_DATE_RE.match(str(value)):
             findings.append(Finding("ERROR", "task-header", rel(abspath),
                                     f"`{field}: {value}` is not an ISO date (YYYY-MM-DD)"))
+    # #11: the window a task is current in. ISO dates compare correctly as strings, so a
+    # window that closes before it opens needs no parsing to spot — and a window nobody
+    # can ever be inside is a typo, not a plan.
+    start, due_raw = fm.get("start"), fm.get("due")
+    if (start and due_raw and ISO_DATE_RE.match(str(start)) and ISO_DATE_RE.match(str(due_raw))
+            and str(start) > str(due_raw)):
+        findings.append(Finding("ERROR", "task-window", rel(abspath),
+                                f"`start: {start}` is later than `due: {due_raw}` — "
+                                "the window closes before it opens"))
     due = fm.get("due")
     if due and ISO_DATE_RE.match(str(due)) and fm.get("status") != "done":
         if _dt.date.fromisoformat(str(due)) < today:
@@ -551,14 +555,14 @@ def validate_task_file(abspath: str, tcfg: dict, today: _dt.date, findings: list
 
 
 def iter_task_files(tasks_dir: str, tcfg: dict):
-    """Task files in a tasks/ directory: no archive, no sprints, no generated files."""
+    """Task files in a tasks/ directory: no archive, no generated files."""
     if not os.path.isdir(tasks_dir):
         return
     for fn in sorted(os.listdir(tasks_dir)):
         p = os.path.join(tasks_dir, fn)
         if not os.path.isfile(p) or not fn.endswith(".md"):
             continue
-        if fn.startswith("_") or fn.startswith("sprint-") or fn.lower() == "readme.md":
+        if fn.startswith("_") or fn.lower() == "readme.md":
             continue
         yield p
 
@@ -633,53 +637,19 @@ def check_entity_tasks(entity: str, cfg: dict, today: _dt.date, findings: list[F
 
 
 def check_task_registry(cfg: dict, today: _dt.date, findings: list[Finding]) -> None:
-    """#10, #12 for company-level tasks, #11 sprint integrity, #14 id uniqueness,
-    #15 placeholder prefix. Runs once per run."""
+    """#10, #11, #12 for company-level tasks, #14 id uniqueness, #15 placeholder prefix.
+    Runs once per run."""
     tcfg = cfg.get("task_registry")
     if not tcfg:
         return
     check_id_prefix(tcfg, findings)
-    ids = collect_ids(tcfg)
-    check_id_uniqueness(ids, findings)
-    titles = {task_id: entries[0][1] for task_id, entries in ids.items()}
+    check_id_uniqueness(collect_ids(tcfg), findings)
 
     base = os.path.join(REPO_ROOT, tcfg["registry_path"])
     if not os.path.isdir(base):
         return
     for p in iter_task_files(base, tcfg):
         validate_task_file(p, tcfg, today, findings)
-
-    active = []
-    for fn in sorted(os.listdir(base)):
-        if not fn.startswith("sprint-") or not fn.endswith(".md"):
-            continue
-        p = os.path.join(base, fn)
-        fm = parse_frontmatter(read_text(p)) or {}
-        if fm.get("status") == "active":
-            active.append(p)
-    if len(active) > 1:
-        for p in active:
-            findings.append(Finding("ERROR", "sprint", rel(p),
-                                    f"more than one active sprint ({len(active)}) — exactly one may carry status: active"))
-    for p in active:
-        for line in read_text(p).splitlines():
-            stripped = line.strip()
-            if not SPRINT_HEAD_RE.match(stripped):
-                continue
-            m = SPRINT_ENTRY_RE.match(stripped)
-            if not m:
-                findings.append(Finding("ERROR", "sprint", rel(p),
-                                        f"entry is not `- <ID> — <Title>`: {stripped[:70]}"))
-                continue
-            task_id, title = m.group("id"), m.group("title").strip()
-            if task_id not in titles:
-                findings.append(Finding("ERROR", "sprint", rel(p),
-                                        f"`{task_id}` is not a task in the registry"))
-                continue
-            if title != titles[task_id].strip():
-                findings.append(Finding("ERROR", "sprint", rel(p),
-                                        f"`{task_id}` title out of date — sprint says {title!r}, "
-                                        f"the task says {titles[task_id].strip()!r}"))
 
 
 def check_freshness(entity: str, cfg: dict, today: _dt.date, findings: list[Finding]) -> None:

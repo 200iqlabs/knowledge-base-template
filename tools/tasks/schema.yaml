@@ -8,7 +8,7 @@
 # Run `/setup` after creating a project from this template to fill it in.
 
 required_fields: [id, title, owner, status, priority, created]
-optional_fields: [due, blocked_by, group, source, closed]
+optional_fields: [start, due, blocked_by, group, source, closed]
 
 # Prefix of task identifiers. An id is `<id_prefix>-<number>`, allocated once and never
 # changed — not on a retitle, not on a `git mv`, not on archiving. The prefix is what
@@ -53,7 +53,7 @@ group_field: group
 
 # Fields that must not appear in a task header, with the reason shown to the user.
 forbidden_fields:
-  sprint: sprint membership lives in the sprint file
+  sprint: the window a task is current in lives in `start` and `due`
   entity: the entity follows from the file path
 
 # Directory layout.
@@ -75,8 +75,8 @@ entity_roots:
 # the repo, so it is English in the code.
 labels:
   index_heading: "Live tasks"
-  index_table_header: "| ID | Entity | Task | Owner | State | Priority | Due | Sprint |"
-  index_table_divider: "|---|---|---|---|:---:|---|---|:---:|"
+  index_table_header: "| ID | Entity | Task | Owner | State | Priority | Start | Due |"
+  index_table_divider: "|---|---|---|---|:---:|---|---|---|"
   index_empty: "No live tasks."
   groups_heading: "Groups"
   group_line_due: "due"
@@ -93,10 +93,8 @@ labels:
   id_map_table_header: "| ID | Path |"
   id_map_table_divider: "|---|---|"
   id_map_empty: "No live tasks to resolve."
-  # Footer of the generated index. Placeholders: {live} {done} {sprint} {date}
-  index_footer: "> {live} live, {done} to archive · {sprint} · generated {date}"
-  sprint_active: "active sprint: {name}"
-  sprint_none: "no active sprint"
+  # Footer of the generated index. Placeholders: {live} {done} {date}
+  index_footer: "> {live} live, {done} to archive · generated {date}"
 
 # Text of the `/today` report. A separate block because the report is ephemeral —
 # never committed, never sent to anyone — but a human reads it every day, so its
@@ -109,10 +107,8 @@ report_labels:
   overdue_empty: "Nothing past due."
   today_heading: "Due today"
   today_empty: "Nothing due today."
-  sprint_heading: "Sprint {name}, remaining"
-  sprint_heading_none: "Sprint, remaining"
-  sprint_empty: "Nothing left in the sprint."
-  sprint_missing: "No active sprint."
+  inplay_heading: "In play, no due date"
+  inplay_empty: "Nothing is in play."
   blocked_heading: "Blocked on an outside party"
   blocked_empty: "Nothing is waiting on an outside party."
   blocked_waiting_on: "waiting on"
@@ -128,5 +124,6 @@ report_labels:
   silence_line: "- **{name}** — last commit {age} days ago"
   task_due: "due {due}"
   task_no_due: "no due date"
+  task_start: "start {start}"
   footer: "> Generated {stamp} from the working directory."
   written_to: "[+] also written to {path}"

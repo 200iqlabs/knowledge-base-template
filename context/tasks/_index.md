@@ -6,11 +6,11 @@
 <!-- AUTO:START -->
 ## Live tasks
 
-| ID | Entity | Task | Owner | State | Priority | Due | Sprint |
-|---|---|---|---|:---:|---|---|:---:|
-| `REPO-1` | EXAMPLE_PROJECT | [Inventory the export — what the outgoing file carries](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md) | Alice | 🟡 | high | 2026-08-14 | ✓ |
-| `REPO-2` | EXAMPLE_PROJECT | [Agree the export format with the reviewer](../projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md) | Bob | 🔴 | high | — | ✓ |
-| `REPO-3` | EXAMPLE_PROJECT | [Draft the onboarding note for new contributors](../projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md) | shared | ⚪ | normal | — | — |
+| ID | Entity | Task | Owner | State | Priority | Start | Due |
+|---|---|---|---|:---:|---|---|---|
+| `REPO-1` | EXAMPLE_PROJECT | [Inventory the export — what the outgoing file carries](../projects/EXAMPLE_PROJECT/tasks/inventory-the-export.md) | Alice | 🟡 | high | 2026-08-04 | 2026-08-14 |
+| `REPO-2` | EXAMPLE_PROJECT | [Agree the export format with the reviewer](../projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md) | Bob | 🔴 | high | — | — |
+| `REPO-3` | EXAMPLE_PROJECT | [Draft the onboarding note for new contributors](../projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md) | shared | ⚪ | normal | 2026-08-05 | — |
 
 ## Groups
 
@@ -27,5 +27,5 @@
 | `REPO-2` | `context/projects/EXAMPLE_PROJECT/tasks/agree-the-export-format.md` |
 | `REPO-3` | `context/projects/EXAMPLE_PROJECT/tasks/draft-onboarding-note.md` |
 
-> 3 live, 0 to archive · active sprint: 2026-W32 · generated 2026-08-11
+> 3 live, 0 to archive · generated 2026-08-31
 <!-- AUTO:END -->

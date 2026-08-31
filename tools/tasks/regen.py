@@ -8,8 +8,8 @@ Scans every tasks/ directory under context/, parses task headers and rewrites:
   - the AUTO region of status.md in each entity that owns tasks
 
 Live task = status in (todo, open, blocked). Tasks with status: done stay in place
-until the sprint is closed but drop out of the open lists; they are reported in a
-separate "awaiting archiving" section so closing a sprint never requires a directory scan.
+until they are archived at session close but drop out of the open lists; they are reported
+in a separate "awaiting archiving" section so archiving never requires a directory scan.
 
 Validation errors go to stderr and exclude the offending task from the index.
 Exit code is 0 unless --strict is passed, so the pre-commit hook never blocks a commit.
@@ -48,15 +48,8 @@ LABEL_KEYS = (
     "groups_heading", "group_line_due", "archive_heading", "archive_line_closed",
     "status_heading", "status_table_header", "status_table_divider", "status_empty",
     "id_map_heading", "id_map_table_header", "id_map_table_divider", "id_map_empty",
-    "index_footer", "sprint_active", "sprint_none",
+    "index_footer",
 )
-
-# A sprint entry is `- <ID> — <Title>`. The title is copied by hand for reading comfort
-# and checked against the task's own `title` field, so the copy cannot quietly rot.
-SPRINT_ENTRY_RE = re.compile(r"^-\s+(?P<id>[A-Z][A-Z0-9]*-\d+)\s+—\s+(?P<title>.+)$")
-# Any bullet that opens with something id-shaped is meant to be an entry. Bullets that
-# do not are prose — a sprint file may carry a note or a ritual checklist.
-SPRINT_HEAD_RE = re.compile(r"^-\s+(?P<id>[A-Z][A-Z0-9]*-\d+)\b")
 
 # Everything below is bound by configure(), never at import time. The repo root is
 # not derived from this file's own location: the generator lives in a template
@@ -201,11 +194,17 @@ def validate(filepath: Path, data: dict) -> bool:
         if field in data:
             error(f"{rel(filepath)}: field `{field}` does not belong in a task — {reason}")
             ok = False
-    for field in ("created", "due", "closed"):
+    for field in ("created", "start", "due", "closed"):
         value = data.get(field)
         if value and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value)):
             error(f"{rel(filepath)}: `{field}: {value}` is not an ISO date (YYYY-MM-DD)")
             ok = False
+    # ISO dates compare correctly as strings, so catching a window that closes before it
+    # opens needs no parsing. A window nobody can ever be inside is a typo, not a plan.
+    start, due = str(data.get("start") or ""), str(data.get("due") or "")
+    if start and due and start > due:
+        error(f"{rel(filepath)}: `start: {start}` is later than `due: {due}` — inverted window")
+        ok = False
     return ok
 
 
@@ -243,12 +242,8 @@ def entity_of(tasks_dir: Path) -> tuple[str, Path | None]:
 
 
 def is_task_file(f: Path) -> bool:
-    """`_*` are generated or template files, `sprint-*` are lists of tasks, not tasks."""
-    return not (
-        f.name.startswith("_")
-        or f.name.startswith("sprint-")
-        or f.name.lower() == "readme.md"
-    )
+    """`_*` are generated files — the index, the report, the monthly pool review."""
+    return not (f.name.startswith("_") or f.name.lower() == "readme.md")
 
 
 ID_HEADER_RE = re.compile(r"^id:\s*[\"']?([^\"'\s]+)", re.MULTILINE)
@@ -338,57 +333,6 @@ def collect_tasks() -> list[dict]:
     return tasks
 
 
-def sprint_entries(sprint_file: Path, by_id: dict[str, dict]) -> set[Path]:
-    """Resolve `- <ID> — <Title>` entries to task paths, checking both halves.
-
-    The title is redundant with the task's own `title` field, and that is deliberate:
-    a sprint file listing bare identifiers is unreadable by a human. The redundancy is
-    made safe by checking it — a copy nobody verifies is a copy that drifts.
-    """
-    linked: set[Path] = set()
-    for line in sprint_file.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not SPRINT_HEAD_RE.match(stripped):
-            continue
-        match = SPRINT_ENTRY_RE.match(stripped)
-        if not match:
-            error(f"{rel(sprint_file)}: sprint entry is not `- <ID> — <Title>` → {stripped}")
-            continue
-        task_id, title = match.group("id"), match.group("title").strip()
-        task = by_id.get(task_id)
-        if task is None:
-            error(f"{rel(sprint_file)}: `{task_id}` is not a task in the registry")
-            continue
-        if title != str(task["title"]).strip():
-            error(
-                f"{rel(sprint_file)}: `{task_id}` title out of date — "
-                f"sprint says {title!r}, the task says {str(task['title']).strip()!r}"
-            )
-        linked.add(task["path"].resolve())
-    return linked
-
-
-def read_active_sprint(tasks: list[dict]) -> tuple[Path | None, set[Path]]:
-    """Resolve the single active sprint file and the tasks its entries point at."""
-    by_id: dict[str, dict] = {}
-    for t in tasks:
-        by_id.setdefault(str(t["id"]), t)
-    active = []
-    for f in sorted(REGISTRY_DIR.glob("sprint-*.md")):
-        data = parse_frontmatter(f)
-        if data and data.get("status") == "active":
-            active.append(f)
-    if not active:
-        return None, set()
-    # Every active sprint gets its entries checked — reporting only the first would hide
-    # a stale entry in exactly the file the next commit is most likely to fix.
-    per_file = {f: sprint_entries(f, by_id) for f in active}
-    if len(active) > 1:
-        error("more than one active sprint: " + ", ".join(rel(f) for f in active))
-    sprint_file = active[0]
-    return sprint_file, per_file[sprint_file]
-
-
 def sort_key(task: dict) -> tuple:
     due = str(task.get("due") or "9999-99-99")
     return (due, PRIORITY_RANK.get(task.get("priority"), 99), task["entity"].lower())
@@ -403,10 +347,9 @@ def link_text(title: str) -> str:
     return str(title).replace("[", "\\[").replace("]", "\\]")
 
 
-def render_index(tasks: list[dict], sprint_file: Path | None, linked: set[Path]) -> str:
+def render_index(tasks: list[dict]) -> str:
     live = [t for t in tasks if t.get("status") in LIVE_STATUSES]
     done = [t for t in tasks if t.get("status") == "done"]
-    sprint_name = sprint_file.stem.replace("sprint-", "") if sprint_file else None
 
     lines = [f"## {LABELS['index_heading']}", ""]
     if live:
@@ -414,12 +357,11 @@ def render_index(tasks: list[dict], sprint_file: Path | None, linked: set[Path])
         lines.append(LABELS["index_table_divider"])
         for t in sorted(live, key=sort_key):
             href = link_from(INDEX_FILE, t["path"])
-            in_sprint = "✓" if t["path"].resolve() in linked else "—"
             lines.append(
                 f"| `{t['id']}` | {t['entity']} | [{link_text(t['title'])}]({href}) "
                 f"| {OWNER_LABEL.get(t['owner'], t['owner'])} "
                 f"| {STATUS_ICON[t['status']]} | {t['priority']} "
-                f"| {t.get('due') or '—'} | {in_sprint} |"
+                f"| {t.get('start') or '—'} | {t.get('due') or '—'} |"
             )
     else:
         lines.append(LABELS["index_empty"])
@@ -471,13 +413,8 @@ def render_index(tasks: list[dict], sprint_file: Path | None, linked: set[Path])
         lines.append(LABELS["id_map_empty"])
     lines.append("")
 
-    sprint_line = (
-        LABELS["sprint_active"].format(name=sprint_name) if sprint_name else LABELS["sprint_none"]
-    )
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    lines.append(LABELS["index_footer"].format(
-        live=len(live), done=len(done), sprint=sprint_line, date=stamp,
-    ))
+    lines.append(LABELS["index_footer"].format(live=len(live), done=len(done), date=stamp))
     return "\n".join(lines)
 
 
@@ -581,7 +518,6 @@ def main() -> int:
         return 1
 
     check_id_uniqueness(scan_ids())
-    sprint_file, linked = read_active_sprint(tasks)
 
     if args.check:
         live = sum(1 for t in tasks if t.get("status") in LIVE_STATUSES)
@@ -589,7 +525,7 @@ def main() -> int:
         return 1 if errors and args.strict else 0
 
     changed = []
-    if write_auto_region(INDEX_FILE, render_index(tasks, sprint_file, linked)):
+    if write_auto_region(INDEX_FILE, render_index(tasks)):
         changed.append(rel(INDEX_FILE))
 
     by_status_file: dict[Path, list[dict]] = {}

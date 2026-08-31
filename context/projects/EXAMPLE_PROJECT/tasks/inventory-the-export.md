@@ -5,6 +5,7 @@ owner: alice
 status: open
 priority: high
 created: 2026-08-04
+start: 2026-08-04
 due: 2026-08-14
 group: export-review
 ---

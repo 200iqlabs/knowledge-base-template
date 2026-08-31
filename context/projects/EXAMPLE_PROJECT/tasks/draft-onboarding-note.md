@@ -5,6 +5,7 @@ owner: shared
 status: todo
 priority: normal
 created: 2026-08-05
+start: 2026-08-05
 ---
 
 ## Context

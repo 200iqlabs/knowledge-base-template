@@ -51,8 +51,8 @@ ERROR is present, `2` on a dependency/config failure.
 | 7 | `extraction` | WARN | File in `communication/` with `extracted: false` or no frontmatter. |
 | 8 | `status-size` | WARN | `status.md` longer than the threshold (default 80 lines), counted **without** the generated `AUTO` section — a long task list is not the author's to shorten. **Backstop for #16**: it reacts to bulk, #16 to the number of closed rows. |
 | 9 | `structure` | ERROR | Missing required file (`status.md`, `catalog.md`, `project.md`, …) per the folder template. |
-| 10 | `task-header` | ERROR | Task file with a missing required field (`id` among them), an `id` not matching `<id_prefix>-<number>`, an `owner`/`status`/`priority` outside the allowed set, `status: blocked` without `blocked_by`, `status: done` without `closed`, a `sprint` field (belongs to the sprint file), or a non-ISO date. |
-| 11 | `sprint` | ERROR | More than one sprint file with `status: active`; entry in an active sprint that is not `- <ID> — <Title>`; entry naming an id absent from the registry; entry whose copied title no longer matches the task's `title`. |
+| 10 | `task-header` | ERROR | Task file with a missing required field (`id` among them), an `id` not matching `<id_prefix>-<number>`, an `owner`/`status`/`priority` outside the allowed set, `status: blocked` without `blocked_by`, `status: done` without `closed`, a field the contract forbids (`sprint`, `entity`), or a non-ISO date. |
+| 11 | `task-window` | ERROR | Task whose `start` is later than its `due` — a window that closes before it opens, which nothing can ever be inside. The number is reused from the retired sprint check rather than freed: renumbering 12–17 would change the meaning of numbers `CLAUDE.md` and the config already refer to. |
 | 12 | `task-overdue` | WARN | Task whose `due` has passed and whose `status` is not `done`. |
 | 13 | `manual-task` | ERROR | `⚪` or `🟡` table row in `status.md` outside the `AUTO` section — a task written by hand instead of created in `tasks/`. The legend naming both icons in prose is not flagged; only table rows are. |
 | 14 | `task-id` | ERROR | Two task files carrying the same `id`. **Scans `_archive/` as well**, unlike every other check: archiving does not return a number to the pool, so a new task reusing an archived id is a real collision. An identifier that has left the repository must keep pointing at one thing. |
@@ -70,8 +70,8 @@ Two shapes, because a knowledge base usually has both:
 - **`file_scopes`** — entities are single `.md` files, no folder. **Only check #2**
   applies, in its file variant. Empty by default.
 - **`task_registry`** — `context/tasks/`, which is not an entity: no `status.md`, no
-  `catalog.md`, no row in any `_index.md`. Checks #10 and #12 run over the company-level
-  task files, #11 over the sprint files, #14 and #15 over the whole repository. Runs once
+  `catalog.md`, no row in any `_index.md`. Checks #10, #11 and #12 run over the company-level
+  task files, #14 and #15 over the whole repository. Runs once
   per lint, not per entity.
 
 A file-shaped entity has no `status.md` and no `catalog.md` by design — its state lives

@@ -4,11 +4,22 @@ Report generator — prints the task report for one person, on demand.
 
 Six sections, in order:
   1. Overdue        — due < today, status != done
-  2. Due today      — due == today
-  3. Sprint, rest   — remaining tasks listed in the active sprint
+  2. Due today      — due == today, or a window (start..due) covering today
+  3. In play        — start <= today with no due date
   4. Blocked        — 🔴 rows from the manual part of every status.md
   5. From outside   — task files a session in another repository has written to
   6. Quiet          — entities with no commit for longer than the threshold
+
+Sections 2 and 3 are what a task is "current" in: the window lives in the task's own
+`start` and `due`, so there is no membership list to keep in step with anything. A task
+with neither date is live and indexed but appears in none of the first three sections —
+it comes back through the monthly pool review, not through this report, which is a plan
+for the day and not a dump of the registry.
+
+A task with `status: blocked` is excluded from sections 2 and 3: waiting on an outside
+party is not work to do. It stays in section 1 when its due date has passed, though — a
+missed deadline on something you are waiting for is the signal to escalate, and is
+exactly what must not be swallowed.
 
 Section titles come from the schema (`report_labels`), not from this file: the
 report is what a human reads every morning, so its language is configuration.
@@ -48,7 +59,6 @@ from regen import (  # noqa: E402  — functions read the module globals when ca
     collect_tasks,
     link_from,
     manual_part,
-    read_active_sprint,
     rel,
     sort_key,
 )
@@ -64,10 +74,16 @@ def task_line(task: dict) -> str:
     L = regen.SCHEMA["report_labels"]
     href = link_from(today_file(), task["path"])
     due = L["task_due"].format(due=task["due"]) if task.get("due") else L["task_no_due"]
+    # The start date is printed only when it is set: on a task that carries a due date it
+    # answers "since when has this been open", which a plan for the day needs, and on one
+    # without a due date it is the only thing saying the task was ever picked up.
+    dates = due
+    if task.get("start"):
+        dates = f"{L['task_start'].format(start=task['start'])}, {due}"
     return (
         f"- {STATUS_ICON[task['status']]} `{task['id']}` **{task['entity']}** "
         f"· [{task['title']}]({href}) "
-        f"— {regen.OWNER_LABEL.get(task['owner'], task['owner'])}, {task['priority']}, {due}"
+        f"— {regen.OWNER_LABEL.get(task['owner'], task['owner'])}, {task['priority']}, {dates}"
     )
 
 
@@ -158,10 +174,9 @@ def silent_entities(today: date, threshold: int) -> list[tuple[str, int]]:
 
 
 def render(today: date, threshold: int, owner: str) -> str:
-    # Collected once, unfiltered: the sprint resolves identifiers against every task in
-    # the registry, not against the slice belonging to one person.
+    # Collected once, unfiltered: sections 4-6 report on the whole repository, not on
+    # the slice belonging to one person.
     all_tasks = collect_tasks()
-    sprint_file, linked = read_active_sprint(all_tasks)
 
     tasks = [t for t in all_tasks if t.get("status") in regen.LIVE_STATUSES]
     if owner != "all":
@@ -172,15 +187,25 @@ def render(today: date, threshold: int, owner: str) -> str:
         keep = {owner} | ({shared} if shared else set())
         tasks = [t for t in tasks if t.get("owner") in keep]
 
-    overdue, due_today, rest = [], [], []
+    iso = today.isoformat()
+    overdue, due_today, in_play = [], [], []
     for t in sorted(tasks, key=sort_key):
         due = str(t.get("due") or "")
-        if due and due < today.isoformat():
+        start = str(t.get("start") or "")
+        if due and due < iso:
             overdue.append(t)
-        elif due == today.isoformat():
-            due_today.append(t)
-        elif t["path"].resolve() in linked:
-            rest.append(t)
+            continue
+        # Everything below is "work for today", which a task waiting on somebody else is
+        # not. The overdue section above deliberately sits before this line.
+        if t.get("status") == "blocked":
+            continue
+        if due:
+            # Inside the window, or due exactly today. A due date still in the future with
+            # no start means the task has not been picked up yet, so it waits.
+            if due == iso or (start and start <= iso):
+                due_today.append(t)
+        elif start and start <= iso:
+            in_play.append(t)
 
     L = regen.SCHEMA["report_labels"]
     who = L["everyone"] if owner == "all" else regen.OWNER_LABEL.get(owner, owner)
@@ -200,11 +225,10 @@ def render(today: date, threshold: int, owner: str) -> str:
     section(L["overdue_heading"], [task_line(t) for t in overdue], L["overdue_empty"])
     section(L["today_heading"], [task_line(t) for t in due_today], L["today_empty"])
 
-    sprint_name = sprint_file.stem.replace("sprint-", "") if sprint_file else None
     section(
-        L["sprint_heading"].format(name=sprint_name) if sprint_name else L["sprint_heading_none"],
-        [task_line(t) for t in rest],
-        L["sprint_missing"] if not sprint_file else L["sprint_empty"],
+        L["inplay_heading"],
+        [task_line(t) for t in in_play],
+        L["inplay_empty"],
     )
 
     section(
