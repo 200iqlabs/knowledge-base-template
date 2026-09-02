@@ -109,6 +109,19 @@ All paths, thresholds, patterns, and exceptions live in `config.yaml`:
 - `name_exceptions` — basenames/globs exempt from the date-prefix rule (check #3).
 - `deliverables_comm_exceptions` — process docs whose name merely contains `mail`/`wa`
   but which are genuine deliverables (check #6 false positives).
+- `external_checks` — checks belonging to the consuming repository, run alongside the
+  core ones. Each entry gives a `label` (shown in the result), a `command` (a list of
+  argv parts, or one string), an optional `path` naming the subtree it speaks about so
+  a scoped `lint <path>` run stays scoped, and an optional `timeout` in seconds. The
+  command prints findings in this tool's own text format — level, check, path, message,
+  tab-separated — and follows the same exit convention (0 clean, 1 when its findings
+  include an ERROR). Its findings are merged into the report under `<label>:<check>`
+  and its ERRORs set the exit code exactly like a core check's. A command that cannot
+  be started, crashes, times out, or prints something unreadable is reported once,
+  against `config.yaml`, as `<label>:config` — a fault in the wiring, not in the repo —
+  and the remaining checks still run. Declaring none leaves the output byte-identical.
+  This exists so a check that has to know a real scope of the consuming repository can
+  stay outside this published template and still run on every `/lint`.
 - `task_registry.schema` — path to `tools/tasks/schema.yaml`, which owns the task
   contract (required fields, `id_prefix`, allowed `owner`/`status`/`priority` values,
   forbidden fields, directory layout). `tools/tasks/regen.py` reads the same file, so

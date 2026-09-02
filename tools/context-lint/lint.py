@@ -24,6 +24,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, asdict
@@ -48,6 +49,11 @@ DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "confi
 # How many entities the last run actually visited. Reported alongside the findings so a
 # clean result can be told apart from a scan that reached nothing.
 SCANNED = 0
+
+# How many external checks the last run executed. Stays 0 -- and stays out of the summary
+# line -- when the config declares none, so a config predating this mechanism still
+# produces byte-identical output.
+EXTERNAL_RAN = 0
 
 
 def default_root() -> str:
@@ -714,13 +720,108 @@ def check_extraction(entity: str, cfg: dict, findings: list[Finding]) -> None:
                                     "extracted != true — the decisions in it were never pulled out"))
 
 
+# --- external checks ---------------------------------------------------------
+# Checks owned by the consuming repository, declared in its config and run alongside the
+# core ones. The core learns nothing about what they inspect -- only how to start them and
+# how to read what they print. That boundary is the point: a check that has to know a real
+# scope of the consuming repo cannot live in a published template, so it lives outside it
+# and is wired in here.
+
+EXTERNAL_LEVELS = ("ERROR", "WARN")
+EXTERNAL_TIMEOUT_DEFAULT = 120
+
+
+def _external_config_finding(label: str, config_path: str, message: str) -> Finding:
+    """A declared check that cannot run is a fault in the configuration, not in the repo.
+
+    Reported against config.yaml rather than any content file, and under a check id that
+    names the entry, so broken wiring is never read as a broken document. It stays an
+    ERROR all the same: a check that silently stops running protects nothing, and a repo
+    that goes green because its verifier died is the failure this mechanism exists to
+    prevent.
+    """
+    return Finding("ERROR", label + ":config", rel(os.path.abspath(config_path)), message)
+
+
+def _parse_external_output(label: str, stdout: str, findings: list[Finding]) -> int:
+    """Fold the check's stdout into our findings. Returns how many lines made no sense.
+
+    The wire format is the core's own text format: level, check, path, message, separated
+    by tabs. Anything else is reported once, in bulk, as a configuration problem -- output
+    that cannot be read is indistinguishable from a check that found nothing.
+    """
+    malformed = 0
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4 or parts[0] not in EXTERNAL_LEVELS:
+            malformed += 1
+            continue
+        level, check, path = parts[0], parts[1].strip(), parts[2]
+        message = "\t".join(parts[3:])
+        findings.append(Finding(level, (label + ":" + check) if check else label,
+                                path, message))
+    return malformed
+
+
+def run_external_checks(config: dict, config_path: str, scope_abs: str | None,
+                        findings: list[Finding]) -> int:
+    """Run every declared external check and merge its findings. Returns how many ran."""
+    ran = 0
+    for entry in config.get("external_checks") or []:
+        label = str(entry.get("label") or "external")
+        command = entry.get("command")
+        if not command:
+            findings.append(_external_config_finding(
+                label, config_path, "entry declares no 'command' -- nothing to run"))
+            continue
+        # An entry may name the subtree it speaks about, so `lint <path>` stays scoped
+        # instead of dragging in a check about a different corner of the repo.
+        subtree = entry.get("path")
+        if subtree and scope_abs is not None and not _within(
+                os.path.join(REPO_ROOT, subtree), scope_abs):
+            continue
+        argv = shlex.split(command) if isinstance(command, str) else [str(a) for a in command]
+        timeout = entry.get("timeout", EXTERNAL_TIMEOUT_DEFAULT)
+        try:
+            proc = subprocess.run(
+                argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=REPO_ROOT, timeout=timeout,
+            )
+        except OSError as exc:
+            findings.append(_external_config_finding(
+                label, config_path, "cannot run %r: %s" % (argv[0], exc)))
+            continue
+        except subprocess.TimeoutExpired:
+            findings.append(_external_config_finding(
+                label, config_path, "exceeded %ss and was killed" % timeout))
+            continue
+        ran += 1
+        malformed = _parse_external_output(label, proc.stdout, findings)
+        # Same exit convention as this script: 0 clean, 1 findings include an ERROR.
+        # Anything else means the command itself broke rather than reporting on the repo.
+        if proc.returncode not in (0, 1):
+            tail = (proc.stderr or "").strip().splitlines()
+            findings.append(_external_config_finding(
+                label, config_path,
+                "exited %s: %s" % (proc.returncode, tail[-1] if tail else "no message")))
+        elif malformed:
+            findings.append(_external_config_finding(
+                label, config_path,
+                "%d output line(s) are not LEVEL<tab>check<tab>path<tab>message" % malformed))
+    return ran
+
+
 # --- orchestration -----------------------------------------------------------
 
-def run(config: dict, scope: str | None, today: _dt.date) -> list[Finding]:
+def run(config: dict, scope: str | None, today: _dt.date,
+        config_path: str) -> list[Finding]:
     findings: list[Finding] = []
     scope_abs = os.path.abspath(scope) if scope else None
-    global SCANNED
+    global SCANNED, EXTERNAL_RAN
     SCANNED = 0
+    EXTERNAL_RAN = 0
 
     for root_cfg in config["scan_roots"]:
         entities = discover_entities(root_cfg)
@@ -752,6 +853,8 @@ def run(config: dict, scope: str | None, today: _dt.date) -> list[Finding]:
     if tcfg and (scope_abs is None or _within(os.path.join(REPO_ROOT, tcfg["registry_path"]), scope_abs)):
         check_task_registry(config, today, findings)
 
+    EXTERNAL_RAN = run_external_checks(config, config_path, scope_abs, findings)
+
     findings.sort(key=lambda f: (f.level != "ERROR", f.check, f.path))
     return findings
 
@@ -776,8 +879,9 @@ def emit(findings: list[Finding], as_json: bool) -> None:
     # The entity count is the point of this line, not decoration. A clean repo prints no
     # findings, which on its own is indistinguishable from a config that matched nothing
     # and scanned zero entities — the failure mode this tool is least able to notice.
+    external = f", {EXTERNAL_RAN} external check(s)" if EXTERNAL_RAN else ""
     print(f"\n{len(findings)} findings: {errors} ERROR, {warns} WARN "
-          f"({SCANNED} entities scanned)", file=sys.stderr)
+          f"({SCANNED} entities scanned{external})", file=sys.stderr)
 
 
 def main(argv: list[str]) -> int:
@@ -802,7 +906,7 @@ def main(argv: list[str]) -> int:
 
     config = load_config(args.config)
     today = _dt.date.today()
-    findings = run(config, args.path, today)
+    findings = run(config, args.path, today, args.config)
     emit(findings, args.json)
     return 1 if any(f.level == "ERROR" for f in findings) else 0
 

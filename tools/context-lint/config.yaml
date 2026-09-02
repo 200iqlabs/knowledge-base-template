@@ -97,3 +97,15 @@ deliverables_comm_exceptions: []
 # added a value to one of them.
 task_registry:
   schema: tools/tasks/schema.yaml
+
+# Checks belonging to the repository that consumes this template, run alongside the core
+# ones. Empty by default, and an empty list changes nothing about the output. Each entry:
+#   - label: short name, shown in the result as `<label>:<check>`
+#     command: [python, tools/<something>/check.py]   # or a single string
+#     path: context/<subtree>    # optional: only run when a scoped lint covers it
+#     timeout: 120               # optional, seconds
+# The command prints findings in this tool's text format (level, check, path, message,
+# tab-separated) and exits 0 clean / 1 when its findings include an ERROR. This is the
+# seam that keeps domain knowledge out of the template: a check that has to name a real
+# scope of the consuming repo lives there, and is wired in here.
+external_checks: []
