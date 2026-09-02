@@ -1,9 +1,9 @@
 ---
 name: close-session
 description: "Session-closing ritual — detect the scope from git, extract decisions from
-  communication/ and from the conversation into status.md/data/, update the three index
-  files (status/catalog/_index), archive the tasks closed in the scope, run the linter and
-  fix ERRORs inside the scope, review
+  communication/ and from the conversation into status.md/data/, put the tasks the session
+  moved to the user and archive the ones it closed, update the three index files
+  (status/catalog/_index), run the linter and fix ERRORs inside the scope, review
   stale data with the user's approval, summarise, and commit once per scope using the
   scope table in CLAUDE.md. Triggers on '/close-session', 'close the session', 'wrap up',
   'close this entity', 'commit per scope'. Sends no messages, creates no deliverables,
@@ -14,10 +14,12 @@ license: Apache-2.0
 # /close-session — the session-closing ritual
 
 A deterministic order of steps — **the order matters**:
-**scope → extraction → the three files → lint → sweep → summary → commit.**
+**scope → extraction → tasks → the three files → lint → sweep → summary → commit.**
 
-Lint runs **after** the three files are updated, because it catches what the agent
-missed. The sweep runs **after** `status.md`, because only then is it visible which
+The tasks come **before** the three files, because the board is written from the task
+files: a closure recorded after the board has been written is a closure the board does
+not show. Lint runs **after** the three files are updated, because it catches what the
+agent missed. The sweep runs **after** `status.md`, because only then is it visible which
 files contradict it.
 
 The skill is **read-only towards the world**: it sends no messages, creates no new
@@ -44,7 +46,7 @@ git log --oneline -20           # recent commits
   `tools/context-lint/config.yaml`.
 - **File-shaped entities are files, not folders.** They have no `status.md` and no
   `catalog.md`; their state lives in a field inside the file. If the session touched
-  them, treat them as one scope and skip steps 2–5 for them apart from the lint.
+  them, treat them as one scope and skip steps 2–6 for them apart from the lint.
 - Proxy for "the last close": the most recent commit that modified any `_index.md`
   (a close always updates an index). When in doubt, show the user the `git log` range
   and ask which commit to count from.
@@ -57,7 +59,7 @@ git log --oneline -20           # recent commits
 - **No changes** (clean working tree, no unclosed commits) → say there is nothing to
   close, and **stop**.
 
-For each confirmed scope, run steps 2–5. The commits are split in step 7.
+For each confirmed scope, run steps 2–6. The commits are split in step 8.
 
 ---
 
@@ -84,7 +86,46 @@ The content stays in `communication/` — nothing is deleted. Full convention:
 
 ---
 
-## Step 3 — Archive the closed tasks, then update the three index files
+## Step 3 — Reconcile the tasks with what the session did
+
+The session has just changed the world; the registry does not know it yet. This step asks
+whether it should.
+
+1. **Take the live tasks of the entities in scope** from the `AUTO` section of each
+   `status.md` — it is generated, so it already *is* the list, and reading it costs one
+   read instead of a scan of `tasks/`. Organisation-wide tasks: the generated section of
+   the registry's own `_index.md`.
+2. **Match them against what the session actually did** — the diff and the commits from
+   Step 1, the decisions extracted in Step 2, and the conversation itself.
+3. **Propose only the ones you have a reason to touch**, one at a time, with
+   **AskUserQuestion** and the options that fit the task's current state:
+   `Closed` · `Picked up (start = today)` · `Blocked on <party>` · `Leave it`.
+4. **Carry out only what the user accepted.** Which field each answer writes — `status`,
+   `closed`, `blocked_by`, `start` — belongs to the `tasks` skill (`State change`,
+   `Pick up`); this step does not restate it, and does not invent a `due` for a task it
+   has just picked up.
+5. **Leave the `AUTO` sections alone.** They are recomputed from the files you just
+   changed.
+
+**This step proposes; it never decides.** A commit naming an effect is evidence that
+something shipped — not that a task is closed, because a task usually outlives the commit
+that moved it. That is the `tasks` skill's boundary ("you do not flip `status: done` on
+the user's behalf"), applied at the moment the temptation is strongest: everything around
+it in this ritual runs without asking, and the pull is to let this run too.
+
+**Nothing to propose → skip the step silently.** Plenty of sessions move no task at all.
+
+**No new tasks here.** Work that surfaced during the session and has no task does not get
+one at close — name it in the summary (Step 8) and let the user open it deliberately. A
+registry filling up with items nobody ordered stops being read, and closing time, when the
+user wants to be finished, is the worst moment to ask them to triage.
+
+What this step leaves behind — a task marked `done` with a filled `closed` field — is
+exactly what Step 4 consumes.
+
+---
+
+## Step 4 — Archive the closed tasks, then update the three index files
 
 **Archive first.** The `🟢` rows are written from the `done` files, so moving them has to
 happen before the board is written, not after.
@@ -98,9 +139,10 @@ filled `closed` field, and:
 2. Add a `🟢` row to that entity's `status.md`, dated from the `closed` field. A row is a
    headline plus a link into `data/`, not the detail itself.
 
-**This step does not ask.** The decision was made when the task was marked `done`; asking
-again is an empty click. That is what separates it from Step 5, where the decision is
-still open and the user's approval is the point.
+**This step does not ask.** The decision was made when the task was marked `done` — in
+Step 3, if this session closed it; asking again is an empty click. That is what separates
+it from Steps 3 and 6, where the decision is still open and the user's approval is the
+point.
 
 **Only the entities in scope.** A task closed during this session is a changed file in its
 own entity, so that entity is in scope by definition and the limit costs nothing day to
@@ -135,14 +177,14 @@ Do not guess 🟡 vs 🔴 — when the material does not say whose side the ball
 3. A remaining row that is a paragraph rather than a headline — longer than
    `status_row_max_chars` in the same config, which is what lint check #17 flags →
    propose condensing it to a headline plus a link into `data/`, and act only **with the
-   user's approval** — the Step 5 rule, applied to `status.md`.
+   user's approval** — the Step 6 rule, applied to `status.md`.
 4. Update `Last updated` in both files, and leave the `AUTO` section untouched.
 5. Backstop: if the hand-written part is still over `status_max_lines` afterwards, say so
    and propose what else to condense. Do not condense it unasked.
 
 ---
 
-## Step 4 — Lint and fix the ERRORs
+## Step 5 — Lint and fix the ERRORs
 
 ```bash
 python tools/context-lint/lint.py "<scope path>"
@@ -164,7 +206,7 @@ Run it with **Bash, not PowerShell** — PowerShell mangles the encoding of the 
 
 ---
 
-## Step 5 — Sweep stale data (with the user's approval)
+## Step 6 — Sweep stale data (with the user's approval)
 
 Review `data/` and `deliverables/` **in the scope folders only** for content that
 contradicts the current `status.md`: expired proposals, plans superseded by newer ones,
@@ -181,7 +223,7 @@ assumptions that no longer hold.
 
 ---
 
-## Step 6 — Conditional: the scope has its own closing skill
+## Step 7 — Conditional: the scope has its own closing skill
 
 Some scopes carry domain knowledge this skill deliberately does not have — a CRM, a
 billing system, an external register. When such a scope defines its own closing skill:
@@ -196,7 +238,7 @@ play → skip this step **silently**.
 
 ---
 
-## Step 7 — Summary and one commit per scope
+## Step 8 — Summary and one commit per scope
 
 1. **A 3–5 sentence summary**: what the session shipped, sent, or settled, and what was
    left open. This becomes the commit message.
@@ -229,6 +271,10 @@ play → skip this step **silently**.
   **NOT** edit rows already sitting in `status_archive.md`.
 - Does **NOT** archive `done` tasks belonging to entities outside the detected scope,
   even when it can see them waiting.
+- Does **NOT** flip a task's `status` on its own judgement — Step 3 proposes, the user
+  decides — and does **NOT** invent a `due` for a task it has just picked up.
+- Does **NOT** open new tasks for work that surfaced during the session. It names them in
+  the summary; opening them is the user's call.
 - A problem in a folder outside the scope → report it, do not fix it.
 
 ## References
@@ -238,3 +284,5 @@ play → skip this step **silently**.
 - Conventions: `CLAUDE.md` → `Status Protocol` (the `status_archive.md` rule and the
   closed-row threshold live there), `Communication Files`, `Commit Convention`,
   `Session Hygiene`.
+- The task model, and which field each state change writes: `CLAUDE.md` → `Task Registry`
+  and the `tasks` skill (`State change`, `Pick up`).

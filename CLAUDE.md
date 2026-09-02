@@ -489,8 +489,9 @@ swept it away". Hundreds of ERRORs from a single directory are a signal about
 `config.yaml`, not about the repo.
 
 **`/close-session`** — `skills/close-session/`. Fixed order:
-**scope → extraction → the three files → lint → sweep → summary → one commit per
-scope**. Lint runs after the three files are updated, because it catches what the agent
+**scope → extraction → tasks → the three files → lint → sweep → summary → one commit per
+scope**. The tasks come before the three files, because the board is written from the
+task files. Lint runs after the three files are updated, because it catches what the agent
 missed. The sweep runs after `status.md`, because only then is it visible what
 contradicts it.
 
