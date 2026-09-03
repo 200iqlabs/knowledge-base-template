@@ -207,10 +207,22 @@ Do not guess 🟡 vs 🔴 — when the material does not say whose side the ball
 ## Step 5 — Lint and fix the ERRORs
 
 ```bash
-python tools/context-lint/lint.py "<scope path>"
+python tools/context-lint/lint.py "<scope path>" --config tools/context-lint/config.yaml
 ```
 
 Run it with **Bash, not PowerShell** — PowerShell mangles the encoding of the output.
+
+**Take the path and the `--config` from the repository's own `CLAUDE.md` where it gives
+them.** Where the tooling sits is a per-repository decision: a repository that keeps the
+executables with the template and only its contracts under `tools/` needs a different path,
+and there the line above fails outright — which is the harmless half, because it is loud.
+
+The `--config` is the quiet half. The linter defaults to the `config.yaml` sitting **next
+to the script**, so an invocation without it checks the repository against neutral template
+thresholds instead of its own, and prints a clean, plausible report while doing it. The
+thresholds it silently swaps out — closed-row length, `status.md` size, freshness windows —
+are exactly the ones a repository tunes, so the run that skipped the flag is the run that
+tells you everything is fine.
 
 - **ERRORs inside the scope → fix them** as part of the close: missing `catalog.md`
   entries, messages sitting in `deliverables/`, structural gaps. **Re-run the lint until
