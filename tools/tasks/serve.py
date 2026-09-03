@@ -46,6 +46,7 @@ named as such — neither arrives as a traceback.
 import argparse
 import html
 import json
+import re
 import os
 import sys
 import threading
@@ -62,6 +63,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # regen.configure() at run time, and a from-import would freeze whatever they held at
 # import time — which is nothing. Same reason regen_today.py states in its own header.
 import regen  # noqa: E402
+
+# Rendering the body is what makes the address worth opening: a page showing the same
+# source as the editor, only uneditable, gives nobody a reason to click. Task files use
+# the whole of markdown - 641 table rows, 762 links and 6673 code spans across the
+# registry - so this is a parser's job, not a few substitutions. Absent, the page falls
+# back to the source and says why, rather than letting the reader conclude that raw
+# markdown is the intended look.
+try:
+    import markdown as _markdown
+    from markdown.treeprocessors import Treeprocessor as _Treeprocessor
+
+    MARKDOWN_ERROR: str | None = None
+except ImportError as _exc:  # pragma: no cover - depends on the machine, not the code
+    _markdown = None
+    _Treeprocessor = object
+    MARKDOWN_ERROR = str(_exc)
+
+# Schemes a link in a task file may carry. Everything else is defused, because
+# Python-Markdown copies a destination into href verbatim - `javascript:` and `data:`
+# included - and a task body is not always something we wrote: reports arrive from
+# sessions in other repositories, and prose gets ingested from mail and transcripts.
+SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto"})
+
+# A scheme is a name followed by a colon. No match means a relative path or a fragment,
+# which is what task files actually use and which carries no scheme to abuse.
+URL_SCHEME_RE = re.compile("^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+class DefuseLinks(_Treeprocessor):
+    """Blank out link and image destinations carrying a scheme we do not allow."""
+
+    def run(self, root):
+        for element in root.iter():
+            for attribute in ("href", "src"):
+                value = element.get(attribute)
+                if value is None:
+                    continue
+                match = URL_SCHEME_RE.match(value.strip())
+                if match and match.group(0)[:-1].lower() not in SAFE_URL_SCHEMES:
+                    # Left visible on purpose: a link that silently stops working reads
+                    # as a broken page, and the reader needs to know it was disarmed.
+                    element.set(attribute, "#")
+                    element.set("title", f"blocked link scheme: {match.group(0)}")
 
 DEFAULT_PORT = 8765
 HEALTH_PATH = "/healthz"
@@ -194,6 +238,31 @@ table.fields td { padding: .2rem 0; }
 pre.body { white-space: pre-wrap; word-wrap: break-word; padding: 1rem; border-radius: .4rem;
   background: rgba(128,128,128,.12); font-size: .85rem; }
 code.path { font-family: ui-monospace, monospace; font-size: .85rem; }
+.prose { margin: 1.25rem 0; }
+.prose > :first-child { margin-top: 0; }
+.prose h1, .prose h2, .prose h3, .prose h4 { line-height: 1.3; margin: 1.6rem 0 .5rem;
+  text-transform: none; letter-spacing: 0; opacity: 1; }
+.prose h1 { font-size: 1.2rem; }
+.prose h2 { font-size: 1.05rem; }
+.prose h3, .prose h4 { font-size: .95rem; }
+.prose p, .prose li { overflow-wrap: anywhere; }
+.prose ul, .prose ol { padding-left: 1.35rem; }
+.prose li { margin: .2rem 0; }
+.prose a { text-decoration: underline; text-underline-offset: .15em; }
+.prose code { font-family: ui-monospace, monospace; font-size: .85em;
+  background: rgba(128,128,128,.15); padding: .1em .35em; border-radius: .25rem; }
+.prose pre { padding: .85rem 1rem; border-radius: .4rem; background: rgba(128,128,128,.12);
+  font-size: .85rem; overflow-x: auto; }
+.prose pre code { background: none; padding: 0; }
+.prose blockquote { margin: 1rem 0; padding: .1rem 0 .1rem 1rem;
+  border-left: 3px solid rgba(128,128,128,.4); opacity: .85; }
+/* A wide table scrolls inside its own box so the page itself never scrolls sideways. */
+.prose table { display: block; overflow-x: auto; max-width: 100%; border-collapse: collapse;
+  margin: 1rem 0; font-size: .9rem; }
+.prose th, .prose td { border: 1px solid rgba(128,128,128,.3); padding: .35rem .6rem;
+  text-align: left; vertical-align: top; }
+.prose th { background: rgba(128,128,128,.1); }
+.prose hr { border: 0; border-top: 1px solid rgba(128,128,128,.3); margin: 1.5rem 0; }
 """
 
 SEARCH_JS = """
@@ -290,6 +359,44 @@ def render_index(today: date) -> bytes:
     return page("Task registry", "".join(parts))
 
 
+def strip_frontmatter(content: str) -> str:
+    """The file without its YAML header, split exactly as regen.parse_frontmatter splits it.
+
+    Same rule, so what the page renders is the precise complement of the fields table
+    above it. The header is dropped because that table already lists it, and because a
+    renderer turns it into a horizontal rule followed by one glued paragraph - noise in
+    the very place this page is meant to remove noise.
+    """
+    if not content.startswith("---"):
+        return content
+    parts = content.split("---", 2)
+    return parts[2].lstrip() if len(parts) == 3 else content
+
+
+def render_body(content: str) -> str:
+    body = strip_frontmatter(content)
+    if _markdown is None:
+        return (
+            '<p class="empty">Body shown as source: the markdown renderer is missing '
+            f"({html.escape(MARKDOWN_ERROR or 'import failed')}). "
+            "Install it with <code>pip install markdown</code>.</p>"
+            f'<pre class="body">{html.escape(body)}</pre>'
+        )
+    # Python-Markdown copies raw HTML through untouched by default - no extension
+    # setting changes that - so a `<script>` in a task file would run in the operator's
+    # browser on this origin. Both handlers are deregistered, which makes such a tag
+    # render as visible text rather than vanish: seeing `<script>` in a task is the
+    # signal that something wrote it there.
+    #
+    # A fresh instance per call because Markdown carries per-conversion state and this
+    # is a threading server; the cost is nothing against reading the file.
+    renderer = _markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists"])
+    renderer.preprocessors.deregister("html_block")
+    renderer.inlinePatterns.deregister("html")
+    renderer.treeprocessors.register(DefuseLinks(renderer), "defuse_links", 1)
+    return '<div class="prose">' + renderer.convert(body) + "</div>"
+
+
 def render_task(task_id: str, paths: list[Path]) -> bytes:
     parts = [f"<h1>{html.escape(task_id)}</h1>"]
     if len(paths) > 1:
@@ -323,7 +430,7 @@ def render_task(task_id: str, paths: list[Path]) -> bytes:
             parts.append(
                 '<p class="empty">No readable header — the file is shown as it stands.</p>'
             )
-        parts.append(f'<pre class="body">{html.escape(content)}</pre>')
+        parts.append(render_body(content))
     parts.append('<p><a href="/">← back to the registry</a></p>')
     return page(task_id, "".join(parts))
 
@@ -462,8 +569,11 @@ class View(ThreadingHTTPServer):
     allow_reuse_address = os.name != "nt"
 
 
-def probe(port: int) -> str:
+def probe(port: int, root: Path | None = None) -> str:
     """Who is holding this port: our own service, or somebody else's.
+
+    Answers "ours", "foreign", or "other-root:<path>" when `root` is given and the
+    instance on the port serves a different checkout.
 
     Asked only after the bind has already failed, so "nothing there" is not one of the
     answers. Occupancy is settled by the bind — authoritative, instant, and immune to a
@@ -475,9 +585,46 @@ def probe(port: int) -> str:
     try:
         with urllib.request.urlopen(url, timeout=2) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return "ours" if payload.get("service") == SERVICE_ID else "foreign"
     except (urllib.error.URLError, OSError, ValueError):
         return "foreign"
+    if payload.get("service") != SERVICE_ID:
+        return "foreign"
+    # Same service, possibly the wrong repository. The port is fixed and this machine
+    # carries more than one checkout, so an instance serving a sibling directory answers
+    # every question correctly and resolves every identifier - to somebody else's tasks.
+    # It is the only failure here that looks like success, so it gets its own answer.
+    if root is not None and Path(str(payload.get("root", ""))).resolve() != root.resolve():
+        return "other-root:" + str(payload.get("root", ""))
+    return "ours"
+
+
+def report_port_state(port: int, address: str) -> int:
+    """One word on stdout saying what a caller may do with this port, and nothing else.
+
+    Four answers, because four situations call for four different moves and silence on
+    the port distinguishes none of them: `ready` (use it), `free` (start one), and the
+    two refusals. Exit stays 0 throughout - this is a question, and being told the port
+    is taken is an answer to it, not a failure to answer.
+
+    Occupancy is settled by a bind, the same way main() settles it, because a firewall
+    that drops rather than refuses makes a connection attempt say "closed" about a port
+    that is open. The socket is released immediately; whoever starts next races nobody
+    but the operator, and the start path already handles losing that race.
+    """
+    try:
+        probe_socket = View(("127.0.0.1", port), Handler)
+    except OSError:
+        state = probe(port, regen.REPO_ROOT)
+        if state == "ours":
+            print(f"ready {address}")
+        elif state.startswith("other-root:"):
+            print(f"busy-other-root {state.split(':', 1)[1]}")
+        else:
+            print("busy-foreign")
+        return 0
+    probe_socket.server_close()
+    print("free")
+    return 0
 
 
 def main() -> int:
@@ -490,6 +637,8 @@ def main() -> int:
                         help="path to schema.yaml (default: the one next to this script)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help=f"port on the loopback interface (default: {DEFAULT_PORT})")
+    parser.add_argument("--probe", action="store_true",
+                        help="report the port's state in one word and exit, starting nothing")
     args = parser.parse_args()
 
     # Windows consoles default to a legacy codepage that cannot encode the status icons
@@ -506,15 +655,24 @@ def main() -> int:
     # Fails fast and loudly if the contract is broken, rather than on the first request.
     configure_registry()
 
+    if args.probe:
+        return report_port_state(args.port, address)
+
     try:
         # Loopback only. Not a hardening measure bolted on afterwards — it is the reason
         # this view ships without authentication at all.
         server = View(("127.0.0.1", args.port), Handler)
     except OSError:
         # The port is taken. Whose it is decides whether that is good news.
-        if probe(args.port) == "ours":
+        state = probe(args.port, regen.REPO_ROOT)
+        if state == "ours":
             print(f"[=] already serving at {address}")
             return 0
+        if state.startswith("other-root:"):
+            # Answers correctly, resolves every identifier, and serves the wrong tasks.
+            print(f"[!] port {args.port} serves another checkout ({state.split(':', 1)[1]})"
+                  " — stop it or pass --port", file=sys.stderr)
+            return 1
         print(f"[!] port {args.port} is held by another process — stop it or pass --port",
               file=sys.stderr)
         return 1
