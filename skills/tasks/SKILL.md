@@ -38,6 +38,11 @@ The mode follows from what the user asks for. Argument: `$ARGUMENTS`.
    - `start` — leave it empty. A new task is not automatically a task being worked on;
      dating it is a separate decision the user makes when they take it on.
    - `created` — today's date.
+   - `repeat` — only for work that genuinely comes back on a cadence (`monthly`,
+     `quarterly`, `yearly`), and only when the user says it does. It schedules nothing:
+     it is what makes the closing ritual propose the next occurrence when this one is
+     archived. A recurring duty recorded as prose in the body instead is a duty that
+     stops happening the first time somebody closes the task without reading it.
    - `id` — **ask the generator**: `python tools/tasks/regen.py --next-id`. Never invent
      one and never count rows in the index; the generator knows about `_archive/`, where
      numbers stay spoken for forever.
@@ -177,6 +182,10 @@ rules loaded, and it must not have to go looking for them.
    5. Do NOT run `git add`, `git commit` or `git push` in that repository. Leave the
       change in the working directory — somebody working there will commit it with the
       rest of that entity's scope.
+
+   6. If the header carries `repeat:`, do NOT open the next occurrence — ids are
+      allocated in this registry and a guessed number collides. Say in your report that
+      the task recurs, so that the session closing it here opens the successor.
    ```
 
    Step 4 is not tidiness. Those generators take a contract as an argument and ship a

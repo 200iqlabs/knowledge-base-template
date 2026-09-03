@@ -120,6 +120,10 @@ one at close — name it in the summary (Step 8) and let the user open it delibe
 registry filling up with items nobody ordered stops being read, and closing time, when the
 user wants to be finished, is the worst moment to ask them to triage.
 
+The one task that does get opened at close is the **successor of a recurring one**, and it
+is opened in Step 4 rather than here — because that is the step every closure passes
+through, including the ones this session never proposed.
+
 What this step leaves behind — a task marked `done` with a filled `closed` field — is
 exactly what Step 4 consumes.
 
@@ -138,11 +142,27 @@ filled `closed` field, and:
    archiving unchanged, and its number stays spoken for.
 2. Add a `🟢` row to that entity's `status.md`, dated from the `closed` field. A row is a
    headline plus a link into `data/`, not the detail itself.
+3. **If the header carries `repeat:`, propose the successor** — **AskUserQuestion**, with
+   `Open the next one` · `Stop the series`. Only that field triggers it; a task without it
+   never raises the question. On acceptance, open the task the way the `tasks` skill
+   describes (`New task`): the same title, owner and group field, the body carried over,
+   `created` today, `status: todo`, no `start`, the same `repeat:`, and `due` advanced by
+   one period of the cadence — a closed task with no `due` gives a successor with none,
+   because a deadline nobody set is not one to invent here either. The id comes from the
+   generator; the closed task's number is never carried forward.
 
-**This step does not ask.** The decision was made when the task was marked `done` — in
-Step 3, if this session closed it; asking again is an empty click. That is what separates
-it from Steps 3 and 6, where the decision is still open and the user's approval is the
-point.
+**This step does not ask — except about a successor.** The closure itself was decided when
+the task was marked `done` — in Step 3, if this session closed it — so asking again is an
+empty click. Opening the next occurrence is a **different decision**, and one nobody has
+made yet.
+
+Two reasons it sits here rather than in Step 3. A task closed by a session in **another
+repository** arrives already `done` and is never proposed in Step 3 — so a recurrence
+handled there would be skipped in exactly the case where the work was carried out
+elsewhere, which is a normal week, not an edge case. And archiving is the moment the
+previous task leaves every board: after it, nothing in the registry says the duty comes
+back, and an occurrence that is never opened produces no overdue row, no warning and no
+trace — the absence of a task is the one state no report can show.
 
 **Only the entities in scope.** A task closed during this session is a changed file in its
 own entity, so that entity is in scope by definition and the limit costs nothing day to
@@ -274,7 +294,9 @@ play → skip this step **silently**.
 - Does **NOT** flip a task's `status` on its own judgement — Step 3 proposes, the user
   decides — and does **NOT** invent a `due` for a task it has just picked up.
 - Does **NOT** open new tasks for work that surfaced during the session. It names them in
-  the summary; opening them is the user's call.
+  the summary; opening them is the user's call. The single exception is the successor of a
+  task carrying `repeat:` — that work was ordered when the recurrence was declared, not
+  discovered here, and Step 4 proposes it rather than deciding.
 - A problem in a folder outside the scope → report it, do not fix it.
 
 ## References

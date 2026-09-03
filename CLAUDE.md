@@ -183,6 +183,7 @@ due: 2026-08-14         # optional
 blocked_by:             # required when status: blocked — who or what
 group: compliance-o1    # optional — groups tasks across entities
 source:                 # optional — URL, file, meeting
+repeat: monthly         # optional — the cadence of a recurring task
 closed:                 # required when status: done
 ---
 ```
@@ -190,6 +191,22 @@ closed:                 # required when status: done
 Required: `id`, `title`, `owner`, `status`, `priority`, `created`. The rest is optional,
 with two conditions: `blocked` without `blocked_by`, and `done` without `closed`, are
 lint errors.
+
+### A task that comes back
+
+`repeat` declares a cadence — `monthly`, `quarterly`, `yearly`. **The field schedules
+nothing**; there is no timer behind it and no generator acts on it. What it does is
+survive to the moment the task is archived, where the session-closing ritual reads it and
+**proposes the next occurrence**: same title and owner, `due` advanced by one period, a
+fresh id, the closed one left closed.
+
+It exists because the alternative does not work. A recurrence written as a sentence inside
+the task ("monthly — on closing, open the next one") is read by whoever closes that task,
+and only then; a session in another repository closes it without ever opening the body,
+and the ritual here has no field to look at. What follows is not an error anybody sees:
+the occurrence is simply never created, and **a task that does not exist appears in no
+report** — not as overdue, not as blocked, not as silence. Recurrence therefore has to be
+data on the task, not prose inside it.
 
 `status` has a **closed list of four values** matching the `status.md` legend: `todo`
 (⚪), `open` (🟡), `blocked` (🔴), `done` (🟢). There is no fifth state.

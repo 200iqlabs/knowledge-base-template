@@ -8,7 +8,14 @@
 # Run `/setup` after creating a project from this template to fill it in.
 
 required_fields: [id, title, owner, status, priority, created]
-optional_fields: [start, due, blocked_by, group, source, closed]
+optional_fields: [start, due, blocked_by, group, source, closed, repeat]
+
+# `repeat` — the cadence of a recurring task (`monthly`, `quarterly`, `yearly`). The field
+# creates nothing by itself and no scheduler reads it: it carries the fact that a successor
+# is owed once this task closes, and the session-closing ritual proposes one at the moment
+# the task is archived. Neither the generator nor the linter validates the value — this
+# contract lists field names, not their vocabularies — so a misspelt cadence passes and is
+# caught by a human or not at all.
 
 # Prefix of task identifiers. An id is `<id_prefix>-<number>`, allocated once and never
 # changed — not on a retitle, not on a `git mv`, not on archiving. The prefix is what
