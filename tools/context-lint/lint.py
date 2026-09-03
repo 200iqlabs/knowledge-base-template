@@ -166,6 +166,10 @@ def parse_frontmatter(text: str) -> dict | None:
     return data if isinstance(data, dict) else {}
 
 
+# Any loopback host and any port: see check_loopback_task_url for why neither is pinned.
+LOOPBACK_HOST = r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?"
+
+
 def iter_files(root: str):
     """Yield absolute file paths under root, skipping .git, hidden dirs, hidden files."""
     for dirpath, dirnames, filenames in os.walk(root):
@@ -368,6 +372,45 @@ def check_names(entity: str, cfg: dict, findings: list[Finding]) -> None:
         if not DATE_PREFIX_RE.match(basename):
             findings.append(Finding("WARN", "naming", rel(abspath),
                                     "missing YYYY-MM-DD date prefix"))
+
+
+def check_loopback_task_url(directory: str, tcfg: dict, findings: list[Finding]) -> None:
+    """#18 a task referred to in a file by a local view's address instead of its id.
+
+    Not every loopback URL: a note documenting how to start a local tool is supposed to
+    carry one, the same way this repository's own instructions do. What this check is
+    after is the narrow case the task rules forbid - an address that resolves an
+    identifier, pasted out of a session into a file.
+
+    That one is the worst kind of dead reference. On the machine that wrote it the link
+    works, so nothing signals a problem; on another station the port is held by
+    something else or by nothing, and a view serving a different checkout would answer
+    with a different task under the same number. The identifier means the same thing
+    everywhere, which is exactly why it, and not an address, is what a file records.
+
+    Neither host nor port is pinned: the reason has nothing to do with which tool
+    listens where, and a port number here would be a second copy of a value that lives
+    in the tool. What identifies the reference is the identifier in the path.
+    """
+    prefix = str(tcfg.get("id_prefix", "")).strip()
+    if not prefix:
+        return
+    pattern = re.compile(LOOPBACK_HOST + rf"/{re.escape(prefix)}-\d+", re.IGNORECASE)
+    for abspath in iter_files(directory):
+        if not abspath.endswith(".md"):
+            continue
+        try:
+            content = read_text(abspath)
+        except OSError:
+            continue
+        for number, line in enumerate(content.splitlines(), 1):
+            found = pattern.search(line)
+            if found:
+                findings.append(Finding(
+                    "WARN", "loopback-task-url", rel(abspath),
+                    f"line {number}: `{found.group(0)}` refers to a task by a local "
+                    "address — a file records the identifier, which means the same "
+                    "thing on every station"))
 
 
 def check_comm_in_deliverables(entity: str, cfg: dict, findings: list[Finding]) -> None:
@@ -843,6 +886,7 @@ def run(config: dict, scope: str | None, today: _dt.date,
             check_inbox(entity, findings)
             check_extraction(entity, config, findings)
             check_manual_tasks(entity, findings)
+            check_loopback_task_url(entity, config.get("task_registry") or {}, findings)
             check_entity_tasks(entity, config, today, findings)
 
     for root_cfg in config.get("file_scopes", []):
@@ -852,6 +896,9 @@ def run(config: dict, scope: str | None, today: _dt.date,
     tcfg = config.get("task_registry")
     if tcfg and (scope_abs is None or _within(os.path.join(REPO_ROOT, tcfg["registry_path"]), scope_abs)):
         check_task_registry(config, today, findings)
+        # Task files are where a pasted address would land first: they are the thing an
+        # agent quotes by identifier in every session.
+        check_loopback_task_url(os.path.join(REPO_ROOT, tcfg["registry_path"]), tcfg, findings)
 
     EXTERNAL_RAN = run_external_checks(config, config_path, scope_abs, findings)
 

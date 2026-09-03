@@ -59,19 +59,21 @@ ERROR is present, `2` on a dependency/config failure.
 | 15 | `task-id` | ERROR | `id_prefix` still set to the template's own default. Skipped while the template's example entity is still on disk (`template_example_entity` in the schema) — a fresh clone must not greet its first user with an error about a value the template shipped. |
 | 16 | `status-closed-rows` | WARN | More `🟢` rows in the hand-written part of `status.md` than `status_closed_rows_kept` — `/close-session` should age the surplus into `<ENTITY>/status_archive.md`. Only the first table cell counts, so the icon appearing inside a row's text is not a second closure. |
 | 17 | `status-row-length` | WARN | A single `🟢` row in `status.md` longer than `status_row_max_chars` — a closed row is a headline plus a link into `data/`, and this one grew into a paragraph. Complements #16: that one bounds how many closed rows a board keeps, this one how much each costs to read. Only `status.md` — a long row in `status_archive.md` costs nothing, since nothing loads the archive by default. One finding per row, capped at five per file with the remainder summarised in one line. |
+| 18 | `loopback-task-url` | WARN | A task referred to by a local view's address instead of its identifier — a link matching `http://<loopback>[:port]/<id_prefix>-<number>` in a `.md` file. Deliberately narrow: a note documenting how to start a local tool is supposed to carry a loopback URL, and only an address that **resolves an identifier** is flagged. It is the worst kind of dead reference, because on the machine that wrote it the link works and nothing signals a problem, while elsewhere the port is held by something else, by nothing, or by a view serving a different checkout — which answers with a different task under the same number. Neither host nor port is pinned: that would be a second copy of a value living in the tool. |
 
 ## Scopes
 
 Two shapes, because a knowledge base usually has both:
 
-- **`scan_roots`** — entities are folders. Checks #1–#13, #16 and #17 apply.
+- **`scan_roots`** — entities are folders. Checks #1–#13 and #16–#18 apply.
   Configured in `config.yaml`; the template ships with `context/projects`.
   An empty scan root is not an error.
 - **`file_scopes`** — entities are single `.md` files, no folder. **Only check #2**
   applies, in its file variant. Empty by default.
 - **`task_registry`** — `context/tasks/`, which is not an entity: no `status.md`, no
   `catalog.md`, no row in any `_index.md`. Checks #10, #11 and #12 run over the company-level
-  task files, #14 and #15 over the whole repository. Runs once
+  task files, #14 and #15 over the whole repository, #18 over the registry
+  directory as well. Runs once
   per lint, not per entity.
 
 A file-shaped entity has no `status.md` and no `catalog.md` by design — its state lives
