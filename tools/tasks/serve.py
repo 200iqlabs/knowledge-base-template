@@ -114,6 +114,12 @@ HEALTH_PATH = "/healthz"
 # path is not enough — something else may well answer there.
 SERVICE_ID = "task-registry-view"
 
+# The one narrowing that is not a value from the task contract: everybody. It is a word
+# rather than only the absence of a parameter because the report already spells the same
+# thing `--owner all`, and two surfaces over one registry should not need two
+# vocabularies for one idea.
+ALL_OWNERS = "all"
+
 # regen binds module globals, so two requests scanning at once would interleave their
 # error lists and their directory cache. The scan is milliseconds; serialising it costs
 # nothing and removes the whole class of problem.
@@ -207,6 +213,65 @@ def partition(
     return overdue, this_week, groups
 
 
+def resolve_owner(query: str) -> tuple[str, str | None]:
+    """Which narrowing this request asks for, and the value that was not recognised.
+
+    Two slots, because "show everybody" arrives three ways that do not mean the same
+    thing: no parameter at all, an empty one, and one naming somebody the contract has
+    never heard of. The first two are the ordinary address of the whole registry. The
+    third is a request the view could not honour, and showing something other than what
+    the address says — without saying so — would be the one place on this page that hides
+    a failure instead of naming it.
+
+    The contract is consulted before the everybody-sentinel, so a repository whose owners
+    really do include one called `all` keeps its own meaning for the word.
+    """
+    wanted = (urllib.parse.parse_qs(query).get("owner") or [""])[0].strip()
+    if not wanted:
+        return ALL_OWNERS, None
+    if wanted in regen.OWNERS:
+        return wanted, None
+    if wanted == ALL_OWNERS:
+        return ALL_OWNERS, None
+    return ALL_OWNERS, wanted
+
+
+def narrow(tasks: list[dict], selected: str) -> list[dict]:
+    """One owner's view of the registry: their tasks, plus the ones owned by everybody.
+
+    The shared owner rides along with every person for the reason it does in the daily
+    report — a shared task sits on both plates, so it can be missing from neither.
+    Selecting the shared owner itself needs no branch of its own: the second name in the
+    pair then matches nothing the first has not already matched, and the view shows the
+    shared tasks alone.
+
+    The price is switch counters that do not sum to the number of live tasks. That is
+    correct rather than a slip: a shared task is counted in every narrowing it shows up
+    in, which is what a counter promising "this is what the click gives you" has to do.
+    """
+    if selected == ALL_OWNERS:
+        return tasks
+    shared = regen.SCHEMA.get("shared_owner")
+    return [t for t in tasks if t.get("owner") in (selected, shared)]
+
+
+def owner_switches(tasks: list[dict]) -> list[tuple[str, str, int]]:
+    """One switch per narrowing the contract allows, plus everybody, with what it shows.
+
+    The count is what the click yields, not how many tasks name that owner exclusively:
+    it is the number the reader is about to check against the rows in front of them, so
+    it runs the same narrowing the click will run.
+
+    Values and labels come from the contract and never from a literal here. This file is
+    template core and reaches repositories whose registry belongs to other people.
+    """
+    switches = [(ALL_OWNERS, "everyone", len(tasks))]
+    for owner in regen.OWNERS:
+        label = str(regen.OWNER_LABEL.get(owner, owner))
+        switches.append((owner, label, len(narrow(tasks, owner))))
+    return switches
+
+
 # --------------------------------------------------------------------------- rendering
 
 STYLE = """
@@ -220,6 +285,17 @@ h2 { font-size: 1rem; margin: 2rem 0 .5rem; text-transform: uppercase; letter-sp
 a { color: inherit; }
 input[type=search] { width: 100%; padding: .6rem .75rem; font: inherit; border-radius: .4rem;
   border: 1px solid rgba(128,128,128,.45); background: transparent; color: inherit; }
+/* Wraps rather than scrolls: a contract may carry more owners than fit on one line, and
+   the page itself must never scroll sideways. */
+nav.owners { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 0; }
+nav.owners a { display: inline-flex; align-items: baseline; gap: .4rem; text-decoration: none;
+  padding: .28rem .7rem; font-size: .85rem; border-radius: 999px;
+  border: 1px solid rgba(128,128,128,.45); }
+nav.owners a .count { opacity: .6; font-variant-numeric: tabular-nums; }
+/* Told apart by three signals at once, so the current narrowing survives a dark theme,
+   a light one and a reader who does not see the colour difference. */
+nav.owners a[aria-current] { border-color: currentColor; font-weight: 600;
+  background: rgba(128,128,128,.18); }
 ul.tasks { list-style: none; margin: 0; padding: 0; }
 li.task { padding: .4rem 0; border-bottom: 1px solid rgba(128,128,128,.18); }
 li.task .id { font-family: ui-monospace, monospace; font-size: .85rem; opacity: .75; }
@@ -267,6 +343,25 @@ code.path { font-family: ui-monospace, monospace; font-size: .85rem; }
 
 SEARCH_JS = """
 const box = document.getElementById('q');
+const sections = Array.from(document.querySelectorAll('[data-section]'));
+
+// Both narrowings have to be able to say "nothing here". Narrowing by owner is settled
+// on the server and arrives already correct; this is the other one, and without it a
+// query with no hits leaves a heading with nothing under it — which reads as a broken
+// render, in the one place on this page that exists to remove noise.
+function settleEmptyStates(q) {
+  sections.forEach(s => {
+    const rows = Array.from(s.querySelectorAll('[data-search]'));
+    const note = s.querySelector('[data-empty]');
+    if (!note) return;
+    // Two emptinesses, two sentences. "Nothing is past its due date" is a claim about
+    // the registry, and it would be false while eleven overdue tasks sit one keystroke
+    // away — emptied by the query, not absent.
+    note.textContent = q === '' ? note.dataset.quiet : 'Nothing here matches that.';
+    note.hidden = rows.length > 0 && rows.some(r => !r.hidden);
+  });
+}
+
 if (box) {
   const rows = Array.from(document.querySelectorAll('[data-search]'));
   const groups = Array.from(document.querySelectorAll('details.group'));
@@ -279,6 +374,7 @@ if (box) {
       g.hidden = q !== '' && hits === 0;
       g.open = q !== '' && hits > 0;
     });
+    settleEmptyStates(q);
   });
 }
 """
@@ -318,44 +414,100 @@ def task_row(task: dict) -> str:
     )
 
 
+def wrap_section(title: str, empty: str, body: str, has_rows: bool) -> str:
+    """A section's heading, its empty state and its rows, as one element.
+
+    The section is present even when it holds nothing — an absent section reads as a
+    rendering fault, an empty one reads as good news. The empty state is in the markup
+    either way and merely hidden while rows are showing, because the search narrows in
+    the browser and has to be able to unhide it without asking the server for a new page.
+
+    One element around all three is also what lets the browser find "the rows of this
+    section" without knowing how they were built: a flat list here, a row of collapsed
+    groups there.
+    """
+    hide = " hidden" if has_rows else ""
+    return (
+        f"<section data-section><h2>{html.escape(title)}</h2>"
+        f'<p class="empty" data-empty{hide} data-quiet="{html.escape(empty, quote=True)}">'
+        f"{html.escape(empty)}</p>"
+        f"{body}</section>"
+    )
+
+
 def section(title: str, tasks: list[dict], empty: str) -> str:
-    """A section is present even when it holds nothing — an absent section reads as a
-    rendering fault, an empty one reads as good news."""
-    if not tasks:
-        return f'<h2>{html.escape(title)}</h2><p class="empty">{html.escape(empty)}</p>'
     rows = "".join(task_row(t) for t in tasks)
-    return f'<h2>{html.escape(title)}</h2><ul class="tasks">{rows}</ul>'
+    return wrap_section(title, empty, f'<ul class="tasks">{rows}</ul>', bool(tasks))
 
 
-def render_index(today: date) -> bytes:
+def render_switches(switches: list[tuple[str, str, int]], selected: str) -> str:
+    """The row of narrowings, each an address rather than a control.
+
+    Everybody is the bare address and not a parameter spelling the word out: `/` has
+    always meant the whole registry, and the switch that returns you there should hand
+    back the short address you came in on.
+    """
+    links = []
+    for value, label, count in switches:
+        href = "/" if value == ALL_OWNERS else "/?owner=" + urllib.parse.quote(value)
+        current = ' aria-current="page"' if value == selected else ""
+        links.append(
+            f'<a href="{html.escape(href, quote=True)}"{current}>{html.escape(label)}'
+            f' <span class="count">{count}</span></a>'
+        )
+    return f'<nav class="owners">{"".join(links)}</nav>'
+
+
+def render_index(today: date, query: str = "") -> bytes:
     tasks, problems = load_live_tasks()
-    overdue, this_week, groups = partition(tasks, today)
+    selected, unrecognised = resolve_owner(query)
+    shown = narrow(tasks, selected)
+    overdue, this_week, groups = partition(shown, today)
+
+    # Narrowing happens before partition(), which is what makes everything downstream
+    # true without being told about it: the sections, the ordering, the entity groups and
+    # every count on them describe the slice in front of the reader. An entity the
+    # narrowing emptied has no group at all, rather than a group promising rows that are
+    # not there.
+    whose = "" if selected == ALL_OWNERS else f" for {regen.OWNER_LABEL.get(selected, selected)}"
+    counted = f"{len(tasks)} live" if selected == ALL_OWNERS else f"{len(shown)} of {len(tasks)} live"
 
     parts = [
         "<h1>Task registry</h1>",
-        f'<p class="meta">{len(tasks)} live · {today.isoformat()} · '
+        f'<p class="meta">{counted} · {today.isoformat()} · '
         f"{html.escape(str(regen.REPO_ROOT))}</p>",
         '<input type="search" id="q" placeholder="Filter by identifier or title" autofocus>',
+        render_switches(owner_switches(tasks), selected),
     ]
+    if unrecognised:
+        # Same frame as a file that fails the contract, and for the same reason: the view
+        # did not do what the address asked, so it says so rather than letting the reader
+        # conclude that this is everything that owner has.
+        parts.append(
+            '<div class="problems"><strong>Unknown owner: '
+            f"{html.escape(unrecognised)}.</strong> The task contract carries no such "
+            "value, so nothing was narrowed — these are everybody's tasks.</div>"
+        )
     if problems:
         items = "".join(f"<li>{html.escape(p)}</li>" for p in problems)
         parts.append(
             f'<div class="problems"><strong>{len(problems)} file(s) skipped — '
             f"they do not meet the task contract:</strong><ul>{items}</ul></div>"
         )
-    parts.append(section("Overdue", overdue, "Nothing is past its due date."))
-    parts.append(section("Due this week", this_week, "Nothing falls due before Sunday."))
+    parts.append(section("Overdue", overdue, f"Nothing{whose} is past its due date."))
+    parts.append(section("Due this week", this_week, f"Nothing{whose} falls due before Sunday."))
 
-    parts.append("<h2>Everything else, by entity</h2>")
-    if not groups:
-        parts.append('<p class="empty">No other live tasks.</p>')
-    for entity, items in groups:
-        rows = "".join(task_row(t) for t in items)
-        parts.append(
-            f'<details class="group"><summary>{html.escape(entity)} '
-            f'<span class="count">{len(items)}</span></summary>'
-            f'<ul class="tasks">{rows}</ul></details>'
+    entities = "".join(
+        f'<details class="group"><summary>{html.escape(entity)} '
+        f'<span class="count">{len(items)}</span></summary>'
+        f'<ul class="tasks">{"".join(task_row(t) for t in items)}</ul></details>'
+        for entity, items in groups
+    )
+    parts.append(
+        wrap_section(
+            "Everything else, by entity", f"No other live tasks{whose}.", entities, bool(groups)
         )
+    )
     return page("Task registry", "".join(parts))
 
 
@@ -519,7 +671,8 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self) -> None:
-        path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
+        request = urllib.parse.urlparse(self.path)
+        path = urllib.parse.unquote(request.path)
         try:
             if path == HEALTH_PATH:
                 # The root is reported so a probe can tell *which* repository the
@@ -535,7 +688,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._respond(200, payload, "application/json; charset=utf-8")
                 return
             if path in ("", "/"):
-                self._respond(200, render_index(date.today()))
+                # The query is read only here. A task address is its bare identifier and
+                # carries no parameters, so the routing rule below is untouched.
+                self._respond(200, render_index(date.today(), request.query))
                 return
             task_id = path.strip("/")
             if "/" in task_id:
