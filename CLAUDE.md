@@ -343,12 +343,24 @@ content or history of correspondence, you read and answer.
 ```yaml
 ---
 channel: chat | email | social
-to: <recipient>
+to: <recipient>          # who received it; for an inbound message, you
+from: <sender>           # optional — who sent it; set it on inbound messages
 date: YYYY-MM-DD
-status: sent | draft
+status: sent | draft | received
 extracted: true | false
 ---
 ```
+
+**`received` is for messages that arrived, not ones you sent.** The directory holds
+correspondence, and a thread is only legible if both halves are in it: an answer whose
+question lives nowhere is a quotation without a source. `sent` on a message you did not
+send is a plain falsehood in a field whose whole job is to say what happened to it — and
+it is not caught by any check, because both values are valid.
+
+`to:` alone cannot carry this. It answers "who has it now", which is true of every message
+in the directory; the direction it travelled is a different fact and needs its own field.
+Set `from:` on inbound messages so the sender is named, and leave it out on outbound ones,
+where it is always you.
 
 ### Extraction is mandatory
 
