@@ -138,10 +138,27 @@ class RelinkTest(unittest.TestCase):
         self.write(".gitignore", "**/runs/*.json\n")
         self.write("context/projects/ALPHA/data/runs/r1.md",
                    "[quiz](/tools/label-quiz) · [raw](response.json)\n"
-                   "[^1]: a footnote, not a link definition\n")
+                   "[^1]: a footnote, not a link definition\n"
+                   "[axis](../osie/<axis>.md) · [run]({run_id}/run.md)\n")
+        self.write("context/projects/ALPHA/data/runs/_TEMPLATE.run.md", "[prompt](prompt.txt)\n")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-qm", "runs")
         self.assertFalse([l for l in relink.scan(self.root) if "runs/" in l.path])
+
+    def test_code_span_wrapped_onto_the_next_line_is_not_a_link(self):
+        self.write("context/projects/ALPHA/data/example.md",
+                   "Write it as `see\n[file](nowhere-path) here` in prose.\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "example")
+        self.assertFalse([l for l in relink.scan(self.root) if l.path.endswith("example.md")])
+
+    def test_link_into_an_ignored_directory_absent_from_this_checkout(self):
+        self.write(".gitignore", "**/scores/\n")
+        self.write("context/projects/ALPHA/data/verdict.md",
+                   "[all scores](scores/) · [one sheet](scores/sheet.csv)\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "verdict")
+        self.assertFalse([l for l in relink.scan(self.root) if l.path.endswith("verdict.md")])
 
     def test_retarget_carries_out_a_decision_and_checks_it(self):
         self.write("context/projects/ALPHA/data/_index.md", "index\n")

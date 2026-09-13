@@ -26,8 +26,11 @@ only where NEW exists. The procedure for deciding is the `relink` skill.
 
 Not checked, because the repository cannot know the answer: URLs; targets starting with
 `/`, which are absolute on whatever serves the page — a code host or a website, and a
-knowledge base holds drafts for both; targets outside the repository; and targets git is
-told to ignore, which exist on the station that produced them and nowhere else.
+knowledge base holds drafts for both; targets outside the repository; targets git is
+told to ignore, which exist on the station that produced them and nowhere else;
+placeholders (`<name>`, `{id}`); and files named `_template*`, whose links resolve only
+once the template is copied to where it will live. Code — fenced blocks and inline spans,
+a span wrapped onto the next line included — is an example, not a link.
 
 Several sessions may share one working tree, so a file with somebody's uncommitted
 changes is never edited — it is listed as skipped. `--own PATH` claims a subtree as the
@@ -68,7 +71,8 @@ INLINE_RE = re.compile(r"\]\(\s*(<[^>\n]*>|[^)\s]+)(?:\s+(?:\"[^\"]*\"|'[^']*'))
 REFDEF_RE = re.compile(r"^ {0,3}\[(?!\^)[^\]]+\]:[ \t]*(<[^>\n]*>|\S+)")
 SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
-CODE_SPAN_RE = re.compile(r"(`+)(.+?)\1")
+# a code span may wrap onto the next line of its paragraph, never past a blank line
+CODE_SPAN_RE = re.compile(r"(`+)((?:(?!\n[ \t]*\n)[\s\S])+?)\1")
 
 
 @dataclass
@@ -179,8 +183,9 @@ def read(root: str, rel: str) -> str | None:
 
 def iter_targets(text: str):
     """Yield (line_no, start, end, target) for every link target outside code."""
-    fence = None
-    for no, line in enumerate(text.split("\n"), 1):
+    lines = text.split("\n")
+    fenced, fence = set(), None
+    for no, line in enumerate(lines):
         opened = FENCE_RE.match(line)
         if opened:
             marker = opened.group(1)
@@ -188,18 +193,23 @@ def iter_targets(text: str):
                 fence = marker
             elif marker[0] == fence[0] and len(marker) >= len(fence):
                 fence = None
+            fenced.add(no)
+        elif fence is not None:
+            fenced.add(no)
+    # Mask code spans with blanks, keeping the newlines: `[x](y)` shown as an example is
+    # not a link, a span may wrap onto the next line of its paragraph, and equal width
+    # keeps every column valid in the original line.
+    prose = "\n".join("" if no in fenced else line for no, line in enumerate(lines))
+    masked = CODE_SPAN_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), prose).split("\n")
+    for no, line in enumerate(lines):
+        if no in fenced:
             continue
-        if fence is not None:
-            continue
-        # Mask code spans with blanks of the same width: `[x](y)` shown as an example is
-        # not a link, and equal width keeps every column valid in the original line.
-        masked = CODE_SPAN_RE.sub(lambda m: " " * len(m.group(0)), line)
         for rx in (INLINE_RE, REFDEF_RE):
-            for m in rx.finditer(masked):
+            for m in rx.finditer(masked[no]):
                 start, end = m.span(1)
-                if masked[start] == "<":
+                if masked[no][start] == "<":
                     start, end = start + 1, end - 1
-                yield no, start, end, line[start:end]
+                yield no + 1, start, end, line[start:end]
 
 
 def split_target(target: str) -> tuple[str, str]:
@@ -214,9 +224,15 @@ def local_path(target: str) -> str | None:
     """The path part of a target the repository can check, else None."""
     if not target or target.startswith(("#", "/")) or SCHEME_RE.match(target):
         return None
-    if "{{" in target or "}}" in target:
+    # `<name>` and `{id}` are placeholders waiting to be filled in, not paths
+    if any(ch in target for ch in "<>{}"):
         return None
     return split_target(target)[0] or None
+
+
+def is_template(rel: str) -> bool:
+    """A template's links resolve only once it is copied to where it will live."""
+    return rel.rsplit("/", 1)[-1].lower().startswith("_template")
 
 
 def norm(path: str) -> str:
@@ -311,7 +327,8 @@ def scan(root: str, paths: list[str] | None = None) -> list[Link]:
         names[f.rsplit("/", 1)[-1]].append(f)
     candidates = []
     for rel in files:
-        if not rel.endswith(".md") or sealed(rel) or (paths and not within(rel, paths)):
+        if not rel.endswith(".md") or sealed(rel) or is_template(rel) \
+                or (paths and not within(rel, paths)):
             continue
         text = read(root, rel)
         if text is None:
@@ -327,8 +344,11 @@ def scan(root: str, paths: list[str] | None = None) -> list[Link]:
                                repair(root, rel, path)))
     # A target git is told to ignore is kept out of version control on purpose — present
     # on the station that produced it, absent everywhere else — so its absence here does
-    # not make the link dead.
-    skip = ignored(root, {r for c in candidates if not c[7] for r in c[6]})
+    # not make the link dead. A directory is asked about with its trailing slash, or a
+    # directory-only pattern (`**/runs/`) cannot match one that is absent from this checkout.
+    asked = {r + ("/" if c[5].endswith("/") else "") for c in candidates if not c[7]
+             for r in c[6]}
+    skip = {p.rstrip("/") for p in ignored(root, asked)}
     links = []
     for rel, no, start, end, target, path, reads, found in candidates:
         suffix = split_target(target)[1]
