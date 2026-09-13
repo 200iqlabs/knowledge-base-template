@@ -141,7 +141,9 @@ For each link in the batch:
 
 ## Report
 
-Return exactly this, and no other prose:
+Return exactly this, and no other prose. Evidence that quotes the target is copied
+verbatim — the orchestrator searches for it, and a paraphrase that fails the search costs
+it the time you saved:
 
 ```
 REPAIRED
