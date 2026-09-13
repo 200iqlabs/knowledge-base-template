@@ -192,6 +192,27 @@ class RelinkTest(unittest.TestCase):
         self.assertEqual(refused.kind, "dead")
         self.assertIn("exists neither", refused.skipped)
 
+    def test_retarget_to_the_last_version_of_a_deleted_file(self):
+        log, order = "context/projects/ALPHA/data/log.md", "context/projects/ALPHA/data/order.md"
+        self.write(order, "Do the thing.\n")
+        self.write(log, "Order: [order.md](order.md) · plan: [plan.md](plan.md)\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "order")
+        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.root, check=True,
+                                capture_output=True, text=True).stdout.strip()
+        git(self.root, "rm", "-q", order)
+        git(self.root, "commit", "-qm", "carried out")
+        blob = f"https://example.com/org/repo/blob/{before}"
+        links = relink.scan(self.root, [log])
+        relink.retarget(self.root, links, [
+            ("order.md", f"{blob}/{order}"),                             # held: written
+            ("plan.md", f"{blob}/context/projects/ALPHA/data/plan.md"),  # never held: refused
+        ])
+        relink.apply(self.root, links, own=[], kinds=("retargeted",))
+        text = self.read(log)
+        self.assertIn(f"[order.md]({blob}/{order})", text)
+        self.assertIn("[plan.md](plan.md)", text)
+
 
 if __name__ == "__main__":
     unittest.main()

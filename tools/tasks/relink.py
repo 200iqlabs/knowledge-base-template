@@ -22,7 +22,9 @@ Every other dead link is reported, with a lead when one is cheap to compute, and
 whoever repairs it: which file an author meant is judgement, and a script that guesses
 turns a dead link into a wrong live one. Once somebody has decided, `--retarget OLD NEW`
 carries the decision out with the same guarantees — only dead links whose target is OLD,
-only where NEW exists. The procedure for deciding is the `relink` skill.
+only where NEW exists. NEW may be a file's address at a commit (`…/blob/<commit>/<path>`),
+the last version of something deleted on purpose; it exists when the local history shows
+that commit holding that file. The procedure for deciding is the `relink` skill.
 
 Not checked, because the repository cannot know the answer: URLs; targets starting with
 `/`, which are absolute on whatever serves the page — a code host or a website, and a
@@ -379,10 +381,17 @@ def scan(root: str, paths: list[str] | None = None) -> list[Link]:
     return links
 
 
+# A file's address at one commit, the way a code host shows history:
+# `https://<host>/<owner>/<repo>/blob/<commit>/<path>`.
+HISTORY_URL_RE = re.compile(r"^https?://\S+?/blob/([0-9a-f]{7,40})/([^#?\s]+)$")
+
+
 def retarget(root: str, links: list[Link], pairs: list[tuple[str, str]]) -> None:
     """Point dead links whose target is OLD at NEW — a decision made by whoever runs it,
     carried out and checked here. NEW is read the way a link is (from the linking file,
-    then from the repository root) and written relative to the linking file."""
+    then from the repository root) and written relative to the linking file. NEW may
+    also be a file's address at a commit — the last version of something deleted — and
+    is written as given once the local history shows that commit holding that file."""
     wanted = dict(pairs)
     for link in links:
         path, suffix = split_target(link.target)
@@ -390,7 +399,13 @@ def retarget(root: str, links: list[Link], pairs: list[tuple[str, str]]) -> None
             continue
         new, here = wanted[path], os.path.dirname(link.path)
         local = norm(os.path.join(here, unquote(new)))
-        if exists(root, local) and not local.startswith("../"):
+        at = HISTORY_URL_RE.match(new)
+        if at:
+            if git(root, "cat-file", "-t", f"{at[1]}:{unquote(at[2])}").strip() != "blob":
+                link.skipped = f"--retarget: commit {at[1]} holds no `{unquote(at[2])}`"
+                continue
+            written = new
+        elif exists(root, local) and not local.startswith("../"):
             written = new
         elif exists(root, norm(unquote(new))) and not norm(new).startswith("../"):
             written = os.path.relpath(norm(unquote(new)), here or ".").replace(os.sep, "/")
