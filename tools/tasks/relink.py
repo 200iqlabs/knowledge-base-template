@@ -29,8 +29,11 @@ Not checked, because the repository cannot know the answer: URLs; targets starti
 knowledge base holds drafts for both; targets outside the repository; targets git is
 told to ignore, which exist on the station that produced them and nowhere else;
 placeholders (`<name>`, `{id}`); and files named `_template*`, whose links resolve only
-once the template is copied to where it will live. Code — fenced blocks and inline spans,
-a span wrapped onto the next line included — is an example, not a link.
+once the template is copied to where it will live. Nor are files marked as build output
+(`linguist-generated` in `.gitattributes`): a build rewrites them from their source, over
+any repair, and writes their links for wherever they get published — so the source is
+what gets checked. Code — fenced blocks and inline spans, a span wrapped onto the next
+line included — is an example, not a link.
 
 Several sessions may share one working tree, so a file with somebody's uncommitted
 changes is never edited — it is listed as skipped. `--own PATH` claims a subtree as the
@@ -128,6 +131,16 @@ def ignored(root: str, rels: set[str]) -> set[str]:
         return set()
     out = git(root, "check-ignore", "--stdin", "-z", stdin="\0".join(sorted(rels)))
     return {p for p in out.split("\0") if p}
+
+
+def generated(root: str, rels: list[str]) -> set[str]:
+    """The files `.gitattributes` marks `linguist-generated` — build output."""
+    if not rels:
+        return set()
+    out = git(root, "check-attr", "--stdin", "-z", "linguist-generated",
+              stdin="\0".join(rels)).split("\0")
+    # answered in triples: path, attribute, value
+    return {out[i] for i in range(0, len(out) - 2, 3) if out[i + 2] in ("set", "true")}
 
 
 def uncommitted(root: str) -> set[str]:
@@ -320,16 +333,19 @@ def hint(root: str, src: str, path: str, names: dict[str, list[str]]) -> str:
 
 
 def scan(root: str, paths: list[str] | None = None) -> list[Link]:
-    """Every dead link in tracked Markdown outside sealed material, classified."""
+    """Every dead link in tracked Markdown outside sealed material and build output,
+    classified."""
     files = tracked_files(root)
     names: dict[str, list[str]] = defaultdict(list)
     for f in files:
         names[f.rsplit("/", 1)[-1]].append(f)
+    docs = [rel for rel in files if rel.endswith(".md") and not sealed(rel)
+            and not is_template(rel) and not (paths and not within(rel, paths))]
+    built = generated(root, docs)
     candidates = []
-    for rel in files:
-        if not rel.endswith(".md") or sealed(rel) or is_template(rel) \
-                or (paths and not within(rel, paths)):
-            continue
+    for rel in docs:
+        if rel in built:
+            continue                         # build output: its source is checked
         text = read(root, rel)
         if text is None:
             continue

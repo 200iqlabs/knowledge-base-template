@@ -47,9 +47,10 @@ python tools/tasks/relink.py [PATH...] --json   # every field: triage and briefs
   The script repairs these in Step 2.
 - `DEAD` — needs a decision. Each carries a lead: `<target> resolves (one ../ more|fewer)`,
   `the only file named …`, `N files named …`, or `no tracked file named …`.
-- Not reported, by design: URLs, `/`-absolute site paths, git-ignored targets, and sealed
+- Not reported, by design: URLs, `/`-absolute site paths, git-ignored targets, sealed
   material (`archive/`, `communication/`, `output/`, `inbox/`), whose links are part of
-  the record.
+  the record, and files `.gitattributes` marks `linguist-generated` — build output, whose
+  links are checked in the source it is built from.
 
 ## Step 2 — Repair what a move explains
 
@@ -69,6 +70,7 @@ directory — the JSON sorted by `target`, then by `hint`, shows them at once.
 |---|---|---|
 | a pattern whose meaning fits one sentence ("every prompt's `_index.md` means its experiment's index, one level up") | you | open 2–3 of the candidates and confirm they are what the link text promises, then one `--retarget OLD NEW` over the group's paths |
 | one or two unrelated links | you | the same check, then `--retarget` on that file or one direct edit |
+| links in build output nobody has marked yet (a release copy, an export — its README names the build) | you | one line in `.gitattributes`: `<pattern> linguist-generated=true`, with a comment naming the build; from then on its source is what gets checked |
 | anything larger | a subagent on a mid-tier model | the brief below, one batch per set of disjoint files |
 | no candidate at all, even after the subagent | the user | one list, grouped by the decision it needs — never invent a target, never drop the link |
 
@@ -133,7 +135,7 @@ For each link in the batch:
    **Leave generated files alone.** A directory whose README says its files are built from
    somewhere else (a release copy, an export for another repository) is rebuilt over any
    repair, and its links may be meant for the destination. Report such a link unresolved
-   with `options: generated — repair the source or the build`.
+   with `options: generated — mark it linguist-generated, the source is checked instead`.
 5. **Never**: change link text or prose, remove a link, create, move, rename or delete a
    file, edit sealed material, touch a file outside the batch, commit, or guess.
 6. **Check your batch** — `python tools/tasks/relink.py <your files>`: every link you

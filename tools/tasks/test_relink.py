@@ -160,6 +160,17 @@ class RelinkTest(unittest.TestCase):
         git(self.root, "commit", "-qm", "verdict")
         self.assertFalse([l for l in relink.scan(self.root) if l.path.endswith("verdict.md")])
 
+    def test_build_output_is_checked_at_its_source(self):
+        release = "context/projects/ALPHA/deliverables/release"
+        self.write(".gitattributes", f"{release}/[0-9][0-9]-*.md linguist-generated=true\n")
+        self.write(f"{release}/01-guide.md", "[notes](../data/notes.md)\n")
+        self.write(f"{release}/README.md", "[notes](../data/notes.md)\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "release")
+        dead = {l.path for l in relink.scan(self.root) if l.kind == "dead"}
+        self.assertNotIn(f"{release}/01-guide.md", dead)
+        self.assertIn(f"{release}/README.md", dead)
+
     def test_retarget_carries_out_a_decision_and_checks_it(self):
         self.write("context/projects/ALPHA/data/_index.md", "index\n")
         self.write("context/projects/ALPHA/data/prompts/p1.md",
