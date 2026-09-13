@@ -7,7 +7,7 @@ description: "Session-closing ritual — detect the scope from git, extract deci
   stale data with the user's approval, summarise, and commit once per scope using the
   scope table in CLAUDE.md. Triggers on '/close-session', 'close the session', 'wrap up',
   'close this entity', 'commit per scope'. Sends no messages, creates no deliverables,
-  touches no files outside the detected scope."
+  touches no files outside the detected scope beyond the links an archive move broke."
 license: Apache-2.0
 ---
 
@@ -23,8 +23,8 @@ agent missed. The sweep runs **after** `status.md`, because only then is it visi
 files contradict it.
 
 The skill is **read-only towards the world**: it sends no messages, creates no new
-deliverables, and modifies no files outside the detected scope (one exception: shared
-`_index.md` files).
+deliverables, and modifies no files outside the detected scope (two exceptions: shared
+`_index.md` files, and the links an archive move in Step 4 broke).
 
 ## Invocation
 
@@ -140,9 +140,24 @@ filled `closed` field, and:
 1. `git mv <entity>/tasks/<slug>.md <entity>/tasks/_archive/` — organisation-wide tasks
    go to the registry's own `_archive/`. The header is **not** edited: the id survives
    archiving unchanged, and its number stays spoken for.
-2. Add a `🟢` row to that entity's `status.md`, dated from the `closed` field. A row is a
+2. **Repoint the links the move broke** — the path of the tool comes from the repository's
+   own `CLAUDE.md`, as for the lint in Step 5:
+   ```bash
+   python tools/tasks/relink.py --apply --own <entity path>   # one --own per entity in scope
+   ```
+   A move into `_archive/` kills every link to the task and every relative link inside
+   it. The tool repoints both — `_archive/` goes in before the file name, the moved file's
+   own links get one more `../` — and writes only what the file system proves; it creates,
+   moves and deletes nothing. It runs over the whole repository, because a link to the
+   task can sit anywhere, and that makes it **the one change this skill makes outside the
+   scope**: the move made here is what broke those links. Each such file goes into its own
+   scope's commit in Step 8. Files carrying somebody else's uncommitted changes are
+   skipped and listed — name them in the summary. Dead links the tool cannot explain are
+   not this step's business: lint check #19 keeps them visible and the `relink` skill
+   repairs them.
+3. Add a `🟢` row to that entity's `status.md`, dated from the `closed` field. A row is a
    headline plus a link into `data/`, not the detail itself.
-3. **If the header carries `repeat:`, propose the successor** — **AskUserQuestion**, with
+4. **If the header carries `repeat:`, propose the successor** — **AskUserQuestion**, with
    `Open the next one` · `Stop the series`. Only that field triggers it; a task without it
    never raises the question. On acceptance, open the task the way the `tasks` skill
    describes (`New task`): the same title, owner and group field, the body carried over,
@@ -284,6 +299,10 @@ play → skip this step **silently**.
    - A shared `_index.md`: when one scope's row changed, include it in that scope's
      commit. When several scopes touched the same file and it cannot be split cleanly,
      make a separate commit with a system scope.
+   - Links `relink.py` repointed in Step 4 outside the scope → a commit per scope they
+     belong to, its message naming the effect ("links to the archived task point at the
+     archive"). Never fold them into this scope's commit: `git log -- <path>` of the other
+     entity has to show what happened to its files.
    - The commit message **names the effect**; it does not enumerate files. "sent the API
      integration proposal to the client", not "update deliverables".
    - Changes to `tools/`, `skills/`, `CLAUDE.md` → a system scope.
@@ -295,8 +314,9 @@ play → skip this step **silently**.
 
 - Does **NOT** send messages through any channel.
 - Does **NOT** create new deliverables.
-- Does **NOT** modify files outside the detected scope. The only exception: shared
-  `_index.md` files.
+- Does **NOT** modify files outside the detected scope. Two exceptions: shared
+  `_index.md` files, and the links Step 4 repoints with `relink.py` because an archive
+  move made in this session broke them.
 - Does **NOT** change `status: draft` to `sent` in `communication/` — a finished draft
   stays a draft until a human sends it.
 - Does **NOT** archive 🔴 rows — they are live state, not closing history — and does

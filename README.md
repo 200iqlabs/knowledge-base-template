@@ -25,7 +25,7 @@ structure you could sketch in five minutes:
 | `CLAUDE.md` | The rules themselves — the working core the agent loads |
 | `context/` | The knowledge base: entities, their state, their tasks |
 | `tools/context-lint/` | Deterministic, read-only consistency checks over `context/` |
-| `tools/tasks/` | Task registry generator and the on-demand report |
+| `tools/tasks/` | Task registry generator, the on-demand report, and `relink.py`, which repairs the links a move broke |
 | `tools/hooks/` | Pre-commit hook that keeps the generated sections current |
 | `skills/`, `.claude/commands/` | `/setup`, `/lint`, `/close-session`, `/today` |
 

@@ -153,6 +153,12 @@ happens **at session close, automatically and without asking**, for the entities
 session touched — the decision was made when the task was marked `done`, and asking again
 is an empty click. Entities outside the session's scope are left alone.
 
+**One way in without being asked: a link that leads nowhere.** A dead link to a task
+almost always means the task was archived — open the same file name in `tasks/_archive/`
+next to where the link points. That is following one reference, not browsing the archive.
+The link itself is a leftover, since archiving repoints links on its own; repair it the
+way `Session Hygiene` describes.
+
 The filename is a kebab-case slug of the title, with no date prefix and no number. The
 slug makes the file findable by a human; it does **not** identify the task.
 
@@ -517,6 +523,23 @@ Zero auto-fixes — on purpose. A linter that edits files stops answering the qu
 swept it away". Hundreds of ERRORs from a single directory are a signal about
 `config.yaml`, not about the repo.
 
+**Dead links** have a tool of their own, `tools/tasks/relink.py`, and a fixed order:
+
+1. **Check** — the default run writes nothing and sorts every dead link into what a move
+   explains and what needs a decision.
+2. **Repair what a move explains** — `--apply`. Above all an archived task: links to it
+   get `_archive/` before the file name, links inside it one more `../`. Only what the
+   file system proves is written; nothing is created, moved or deleted.
+3. **Decide the rest by size** — which file an author meant is judgement, never the
+   script's. One pattern or a couple of links: decide and carry it out yourself, with
+   `--retarget OLD NEW` (it rewrites only dead links, and only where NEW exists) or one
+   direct edit. More than that: hand the batch to a subagent on a mid-tier model working
+   from the `relink` skill; it reports what it repaired, what it could not and why, and
+   what should change in the skill. Verify, commit per scope, and fold that last part
+   into the skill — the procedure improves with every run instead of with every mistake.
+
+The linter's check #19 keeps the count visible and still fixes nothing.
+
 **`/close-session`** — `skills/close-session/`. Fixed order:
 **scope → extraction → tasks → the three files → lint → sweep → summary → one commit per
 scope**. The tasks come before the three files, because the board is written from the
@@ -525,8 +548,8 @@ missed. The sweep runs after `status.md`, because only then is it visible what
 contradicts it.
 
 Hard boundaries: it does not send messages, does not create deliverables, does not touch
-files outside the detected scope (exception: shared `_index.md` files), and does not
-flip `status: draft` to `sent`.
+files outside the detected scope (exceptions: shared `_index.md` files, and the links an
+archive move broke), and does not flip `status: draft` to `sent`.
 
 ## Commit Convention
 

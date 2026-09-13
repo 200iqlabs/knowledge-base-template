@@ -119,9 +119,12 @@ before writing history, because the `🟢` rows are written from the `done` file
 1. **Archive** — `git mv` the files with `status: done` into `<entity>/tasks/_archive/`
    (organisation-wide tasks → `context/tasks/_archive/`). The header is not edited: the
    id survives archiving unchanged, and its number stays spoken for.
-2. **History** — for each archived task, add a `🟢` row to the `status.md` of its entity,
+2. **Repoint** — `python tools/tasks/relink.py --apply` repairs every link the move broke,
+   anywhere in the repository: links to the task get `_archive/` before the file name,
+   links inside it one more `../`. Only what the file system proves is written.
+3. **History** — for each archived task, add a `🟢` row to the `status.md` of its entity,
    dated from the `closed` field.
-3. **Regenerate and commit** — the pre-commit hook recomputes `_index.md` and the `AUTO`
+4. **Regenerate and commit** — the pre-commit hook recomputes `_index.md` and the `AUTO`
    sections.
 
 **Only the session's own scope.** A task closed during a session is a changed file in its
@@ -178,7 +181,8 @@ those files is read.
 
 Access is on demand only — a question like "what did we close in April", "what were we
 working on last quarter", "have we done anything with export metadata yet". Then the
-agent reads `_archive/` and answers.
+agent reads `_archive/` and answers. The other way in is one reference at a time: a link
+to a task that leads nowhere is followed into `_archive/` — `CLAUDE.md` → `Task Registry`.
 
 ## Generated files
 
