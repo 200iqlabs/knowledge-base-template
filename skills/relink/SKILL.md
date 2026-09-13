@@ -103,6 +103,10 @@ For each link in the batch:
    5. distinctive words from the link text: `git grep -l -F '<words>'`.
 3. **Decide.** Exactly one candidate that keeps the promise → repair. Several, or none that
    keeps it → leave the link as it is and report it unresolved, with what you tried.
+   **Confirm identity by the target's own identifier** — the id, run id or date in its
+   header — never by a word that merely occurs in it. Records get renumbered, and two
+   records can share a short id: an id plus a matching keyword once pointed at a
+   different, earlier record than the one the link meant.
 4. **Repair the target only** — the part inside `( )`. Prefer the tool, which rewrites only
    dead links and checks the new target exists:
    ```bash
