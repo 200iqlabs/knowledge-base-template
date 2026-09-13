@@ -99,6 +99,17 @@ class RelinkTest(unittest.TestCase):
         relink.apply(self.root, relink.scan(self.root), own=[])
         self.assertIn("(../../data/notes.md)", self.read(ARCHIVED))
 
+    def test_moved_file_linking_a_task_archived_after_it(self):
+        self.write("context/projects/BETA/tasks/other.md", "other\n")
+        self.write(ARCHIVED, self.read(ARCHIVED) + "Also [other](../../BETA/tasks/other.md)\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "both")
+        os.makedirs(os.path.join(self.root, "context/projects/BETA/tasks/_archive"))
+        git(self.root, "mv", "context/projects/BETA/tasks/other.md",
+            "context/projects/BETA/tasks/_archive/other.md")
+        link = self.by_place()[(ARCHIVED, 2)]
+        self.assertEqual((link.kind, link.fix), ("moved", "../../../BETA/tasks/_archive/other.md"))
+
     def test_task_moved_back_out_of_the_archive(self):
         self.write("context/projects/ALPHA/tasks/live.md", "live\n")
         self.write("context/projects/ALPHA/data/back.md",

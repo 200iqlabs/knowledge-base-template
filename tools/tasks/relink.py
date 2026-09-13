@@ -242,22 +242,37 @@ def resolves(root: str, src: str, path: str) -> bool:
     return any(exists(root, r) for r in readings(src, path))
 
 
+def into_archive(root: str, src: str, path: str) -> str | None:
+    """`path` with `_archive/` before the file name, when that is where the task went."""
+    head, sep, base = path.rpartition("/")
+    for r in readings(src, path):
+        parent = os.path.dirname(r)
+        if os.path.basename(parent) == TASKS_DIR \
+                and exists(root, f"{parent}/{ARCHIVE_DIR}/{os.path.basename(r)}"):
+            fixed = f"{head}{sep}{ARCHIVE_DIR}/{base}"
+            if resolves(root, src, fixed):
+                return fixed
+    return None
+
+
 def repair(root: str, src: str, path: str) -> tuple[str, str] | None:
     """(kind, corrected path) when the file system proves one, else None."""
-    # Outbound: the file holding the link was itself moved one directory down.
+    # Outbound: the file holding the link was itself moved one directory down — and the
+    # task it links to may have been archived after it, which needs both repairs at once.
     if in_task_archive(src):
         deeper = "../" + (path[2:] if path.startswith("./") else path)
         if resolves(root, src, deeper):
             return "moved", deeper
+        both = into_archive(root, src, deeper)
+        if both:
+            return "moved", both
+    fixed = into_archive(root, src, path)
+    if fixed:
+        return "archived", fixed
     head, sep, base = path.rpartition("/")
     for r in readings(src, path):
         parent = os.path.dirname(r)
         name = os.path.basename(r)
-        if os.path.basename(parent) == TASKS_DIR \
-                and exists(root, f"{parent}/{ARCHIVE_DIR}/{name}"):
-            fixed = f"{head}{sep}{ARCHIVE_DIR}/{base}"
-            if resolves(root, src, fixed):
-                return "archived", fixed
         if os.path.basename(parent) == ARCHIVE_DIR \
                 and os.path.basename(os.path.dirname(parent)) == TASKS_DIR \
                 and exists(root, f"{os.path.dirname(parent)}/{name}"):
