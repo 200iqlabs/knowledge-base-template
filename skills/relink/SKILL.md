@@ -97,8 +97,11 @@ For each link in the batch:
    1. the lead from the report — open the candidate, confirm it keeps the promise;
    2. an id in the link text (`<PREFIX>-<number>`):
       `git grep -l -E '^id: <ID>$' -- '*/tasks/*.md'` (archived tasks included);
-   3. the target's history, which shows renames and deletions:
-      `git log --format='%h %ad %s' --date=short --name-status -M -- '<repo path of the target>'`;
+   3. the target's history — find the commit that removed it, then read that whole commit,
+      because a history narrowed to one path shows a bare deletion and hides both a rename
+      destination and content that landed in another file of the same commit:
+      `git log --format='%h %ad %s' --date=short --diff-filter=DR -- '<repo path of the target>'`,
+      then `git show --stat -M <commit>`;
    4. the file name anywhere: `git ls-files '*<name>*'`;
    5. distinctive words from the link text: `git grep -l -F '<words>'`.
 3. **Decide.** Exactly one candidate that keeps the promise → repair. Several, or none that
@@ -106,7 +109,9 @@ For each link in the batch:
    **Confirm identity by the target's own identifier** — the id, run id or date in its
    header — never by a word that merely occurs in it. Records get renumbered, and two
    records can share a short id: an id plus a matching keyword once pointed at a
-   different, earlier record than the one the link meant.
+   different, earlier record than the one the link meant. The converse holds as well: a
+   matching id settles it even when the target's title no longer resembles the link text —
+   titles drift under a stable id, so a title mismatch alone is no reason to keep looking.
 4. **Repair the target only** — the part inside `( )`. Prefer the tool, which rewrites only
    dead links and checks the new target exists:
    ```bash
