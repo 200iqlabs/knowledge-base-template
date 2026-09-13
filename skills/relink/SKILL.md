@@ -111,6 +111,14 @@ For each link in the batch:
    The new target is written relative to the linking file, or as a repository path, which
    the tool converts. Edit by hand only what `--retarget` cannot express — the same old
    target meaning two different files inside one file.
+   **Pass `--own <each file of your batch>` on every run**, and put every decision about
+   one file into a single run (`--retarget` repeats). The tool never edits a file with
+   uncommitted changes it was not told are yours — and after your first run, your own
+   edits are exactly that.
+   **Leave generated files alone.** A directory whose README says its files are built from
+   somewhere else (a release copy, an export for another repository) is rebuilt over any
+   repair, and its links may be meant for the destination. Report such a link unresolved
+   with `options: generated — repair the source or the build`.
 5. **Never**: change link text or prose, remove a link, create, move, rename or delete a
    file, edit sealed material, touch a file outside the batch, commit, or guess.
 6. **Check your batch** — `python tools/tasks/relink.py <your files>`: every link you
