@@ -60,6 +60,7 @@ ERROR is present, `2` on a dependency/config failure.
 | 16 | `status-closed-rows` | WARN | More `🟢` rows in the hand-written part of `status.md` than `status_closed_rows_kept` — `/close-session` should age the surplus into `<ENTITY>/status_archive.md`. Only the first table cell counts, so the icon appearing inside a row's text is not a second closure. |
 | 17 | `status-row-length` | WARN | A single `🟢` row in `status.md` longer than `status_row_max_chars` — a closed row is a headline plus a link into `data/`, and this one grew into a paragraph. Complements #16: that one bounds how many closed rows a board keeps, this one how much each costs to read. Only `status.md` — a long row in `status_archive.md` costs nothing, since nothing loads the archive by default. One finding per row, capped at five per file with the remainder summarised in one line. |
 | 18 | `loopback-task-url` | WARN | A task referred to by a local view's address instead of its identifier — a link matching `http://<loopback>[:port]/<id_prefix>-<number>` in a `.md` file. Deliberately narrow: a note documenting how to start a local tool is supposed to carry a loopback URL, and only an address that **resolves an identifier** is flagged. It is the worst kind of dead reference, because on the machine that wrote it the link works and nothing signals a problem, while elsewhere the port is held by something else, by nothing, or by a view serving a different checkout — which answers with a different task under the same number. Neither host nor port is pinned: that would be a second copy of a value living in the tool. |
+| 19 | `dead-link` | WARN | A Markdown link whose target does not exist, anywhere in the repository's tracked `.md` files outside sealed material (`archive/`, `communication/`, `output/`, `inbox/` — links there are part of the record). The commonest cause is a move, archiving above all: the finding then carries the repair, because `tools/tasks/relink.py --apply` can prove it (the task is in `_archive/` next to where the link looks; the file holding the link moved one directory down). Every other dead link carries a lead — a target one `../` away, the only file with that name, or no such file at all — and waits for a decision: which file an author meant is judgement, see the `relink` skill. The definition of a dead link, and of which ones are repairable, lives in `relink.py` and this check imports it, so the tool and the check cannot disagree. A WARN: a dead link loses a pointer, not a fact. Closed history nobody reads by default (`tasks/_archive/`, `status_archive.md`) reports only what the tool repairs on its own. Capped at five findings per file, the remainder summarised in one line. |
 
 ## Scopes
 
@@ -75,6 +76,8 @@ Two shapes, because a knowledge base usually has both:
   task files, #14 and #15 over the whole repository, #18 over the registry
   directory as well. Runs once
   per lint, not per entity.
+- **#19** runs once over every tracked `.md` file in the repository (or under `PATH`),
+  not per entity — a link crosses entities, scopes and the registry alike.
 
 A file-shaped entity has no `status.md` and no `catalog.md` by design — its state lives
 in a field inside the file — so the folder-shaped checks would only produce noise. What
@@ -138,4 +141,6 @@ Same repo state → same findings and same exit code. The only time-varying inpu
 
 No auto-fix. Ever. A linter that edits files stops being a trustworthy signal: you can
 no longer tell whether a clean run means the repo was fine or the tool papered over it.
+The repairs check #19 names are written by `tools/tasks/relink.py` — a separate tool,
+run deliberately; the linter only imports its definition of a dead link.
 Repairs are the agent's job in `/close-session`, where a human is in the loop.

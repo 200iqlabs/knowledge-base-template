@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import fnmatch
+import importlib.util
 import json
 import os
 import re
@@ -411,6 +412,73 @@ def check_loopback_task_url(directory: str, tcfg: dict, findings: list[Finding])
                     f"line {number}: `{found.group(0)}` refers to a task by a local "
                     "address — a file records the identifier, which means the same "
                     "thing on every station"))
+
+
+# check #19 takes its definition of a dead link — and of which ones are provably
+# repairable — from tools/tasks/relink.py, the tool that repairs what this check reports.
+# One definition read by both, instead of two that drift. Loaded by path: the two tools
+# sit in sibling directories of the template, not in a package.
+RELINK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                           "tasks", "relink.py")
+# check #19: per-file cap, for the same reason as ROW_LENGTH_FINDINGS_PER_FILE.
+DEAD_LINK_FINDINGS_PER_FILE = 5
+RELINK_REASONS = {
+    "archived": "the task was archived",
+    "unarchived": "the task left the archive",
+    "moved": "this file moved one directory down, into the archive",
+}
+
+
+def _load_relink():
+    try:
+        spec = importlib.util.spec_from_file_location("context_lint_relink", RELINK_PATH)
+        module = importlib.util.module_from_spec(spec)
+        # dataclasses look their module up in sys.modules while the class is built
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    except (OSError, ImportError, AttributeError):
+        return None
+
+
+def check_dead_links(scope_abs: str | None, findings: list[Finding]) -> None:
+    """#19 a link whose target does not exist.
+
+    The usual cause is a move, and the commonest move is archiving a task: every link to
+    it dies at once, and so does every relative link inside it. Those are reported with
+    the repair already worked out, because `relink.py --apply` can prove it — the rest
+    carry a lead and wait for a decision, since which file an author meant is judgement.
+
+    A WARN, not an ERROR: a dead link loses a pointer, not a fact, and the file that holds
+    it is still right. Closed history nobody reads by default (archived tasks, aged-out
+    status rows) reports only what the tool repairs on its own; a hand-made dead link
+    there would be noise on every run and cost nobody anything.
+    """
+    relink = _load_relink()
+    if relink is None:
+        findings.append(Finding("WARN", "dead-link", rel(os.path.abspath(RELINK_PATH)),
+                                "relink.py could not be loaded — check #19 skipped"))
+        return
+    tool = rel(os.path.abspath(RELINK_PATH))
+    per_file: dict[str, int] = {}
+    for link in relink.scan(REPO_ROOT, [rel(scope_abs)] if scope_abs else None):
+        if link.kind == "dead" and relink.unread_by_default(link.path):
+            continue
+        count = per_file[link.path] = per_file.get(link.path, 0) + 1
+        if count > DEAD_LINK_FINDINGS_PER_FILE:
+            continue
+        if link.kind == "dead":
+            message = f"line {link.line}: `{link.target}` leads nowhere — {link.hint}"
+        else:
+            message = (f"line {link.line}: `{link.target}` — {RELINK_REASONS[link.kind]}; "
+                       f"`python {tool} --apply` repoints it to `{link.fix}`")
+        findings.append(Finding("WARN", "dead-link", link.path, message))
+    for path, count in per_file.items():
+        if count > DEAD_LINK_FINDINGS_PER_FILE:
+            findings.append(Finding(
+                "WARN", "dead-link", path,
+                f"... and {count - DEAD_LINK_FINDINGS_PER_FILE} more dead link(s) "
+                f"in this file — `python {tool} {path}` lists them all"))
 
 
 def check_comm_in_deliverables(entity: str, cfg: dict, findings: list[Finding]) -> None:
@@ -899,6 +967,10 @@ def run(config: dict, scope: str | None, today: _dt.date,
         # Task files are where a pasted address would land first: they are the thing an
         # agent quotes by identifier in every session.
         check_loopback_task_url(os.path.join(REPO_ROOT, tcfg["registry_path"]), tcfg, findings)
+
+    # A link crosses entities, scopes and the registry alike, so #19 runs once over the
+    # whole scope rather than per entity.
+    check_dead_links(scope_abs, findings)
 
     EXTERNAL_RAN = run_external_checks(config, config_path, scope_abs, findings)
 
