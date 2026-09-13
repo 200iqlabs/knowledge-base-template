@@ -92,7 +92,9 @@ Batches with disjoint files run in parallel.
 For each link in the batch:
 
 1. **Read the line and a few around it.** What does the link promise — a task id, a file
-   name, a section, a document described in the sentence?
+   name, a section, a document described in the sentence? The text may already say the
+   target was removed on purpose — orders and prompts are often deleted once carried out.
+   Then the link is unresolved for that stated reason, and no search is needed.
 2. **Find candidates, cheapest first**, and stop at the first that settles it:
    1. the lead from the report — open the candidate, confirm it keeps the promise;
    2. an id in the link text (`<PREFIX>-<number>`):
@@ -124,6 +126,10 @@ For each link in the batch:
    one file into a single run (`--retarget` repeats). The tool never edits a file with
    uncommitted changes it was not told are yours — and after your first run, your own
    edits are exactly that.
+   **A link into another repository is not yours to repair.** The tool checks and writes
+   targets inside this repository only, and a relative path to a sibling checkout depends
+   on what that directory is called on each machine. Report it unresolved with
+   `options: name the repository in prose instead of a relative path`.
    **Leave generated files alone.** A directory whose README says its files are built from
    somewhere else (a release copy, an export for another repository) is rebuilt over any
    repair, and its links may be meant for the destination. Report such a link unresolved
