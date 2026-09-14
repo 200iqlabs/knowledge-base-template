@@ -47,9 +47,8 @@ except ImportError:
     )
     sys.exit(2)
 
-# Console encoding: the session line carries a separator and the report carries Polish
-# prose, and a Windows console defaults to cp1250. Replace rather than raise — a mangled
-# character is a cosmetic problem, a traceback in a status line is not.
+# Console encoding: a Windows console defaults to a legacy codepage. Replace rather than
+# raise — a mangled character is cosmetic, a traceback in a status line is not.
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -61,7 +60,13 @@ DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "confi
 # directories of the template, not in a package — the same arrangement lint.py uses.
 RELINK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
                            "tasks", "relink.py")
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+# The only edge type there is. It is carried explicitly so that adding a second source of
+# edges later (co-occurrence in a commit, say) is an addition rather than a rewrite of
+# everything that reads the graph.
+EDGE_LINK = "link"
+LOCK_NAME = "building.lock"
+ABSENT_LINE = "context: no graph yet — building in the background"
 
 
 def write_json(path: str, payload, **dump) -> None:
@@ -106,6 +111,23 @@ def load_relink():
         return None
 
 
+def relink_fingerprint() -> str:
+    """A hash of relink.py, stored alongside the cache.
+
+    The cache holds link targets extracted by relink's rules, keyed by the hash of the
+    file they came from. That is sound only while the rules themselves hold still: change
+    how relink masks code spans or resolves a target, and every unchanged file keeps
+    serving its old answer — a graph quietly disagreeing with the check that shares its
+    definition, until something happens to touch every file in the base. The fingerprint
+    turns that into a one-off full rebuild, which is what it should have been.
+    """
+    try:
+        with open(RELINK_PATH, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:16]
+    except OSError:
+        return "unknown"
+
+
 def load_config(path: str) -> dict | None:
     """The config, or None when there is none.
 
@@ -144,26 +166,72 @@ def resolve_rules(config: dict, root: str) -> dict:
             "falling back to the rules declared in this config\n"
         )
         return rules
-    if lint.get("self_index_marker"):
+    # `is not None`, not truthiness: a config that deliberately excludes nothing declares
+    # an empty list, and reading that as "unset" would silently restore the fallback —
+    # the linter and this tool would then disagree about the very rule they share.
+    if lint.get("self_index_marker") is not None:
         rules["self_index_marker"] = lint["self_index_marker"]
-    if lint.get("catalog_exclude_dirs"):
+    if lint.get("catalog_exclude_dirs") is not None:
         rules["exclude_dirs"] = list(lint["catalog_exclude_dirs"])
-    scopes = [r["path"] for r in lint.get("scan_roots", []) if r.get("path")]
-    if scopes:
-        rules["entity_scopes"] = scopes
+    if lint.get("scan_roots") is not None:
+        rules["entity_scopes"] = [r["path"] for r in lint["scan_roots"] if r.get("path")]
     return rules
 
 
-# --- nodes -------------------------------------------------------------------
+# --- the file set ------------------------------------------------------------
 
-def list_nodes(relink, root: str, scan_roots: list[str]) -> list[str]:
-    """Tracked Markdown inside the configured scopes.
+def walk_markdown(root: str, roots: list[str]) -> list[str]:
+    """Every `.md` file under the given roots, as the working tree has it right now.
 
-    Tracked, not walked: an untracked file is somebody's work in progress, and the same
-    choice relink makes keeps the two tools answering about the same universe of files.
+    Deliberately not `git ls-files`: that reads the **index**, so staging a newly created
+    file would change what the graph — and therefore the linter's orphan check — reports,
+    for content that did not change, and a deletion not yet staged would keep a file in
+    the list that is no longer on disk. The linter's contract is that its result does not
+    depend on what happens to be staged, and a walk is the only source of truth that can
+    honour both that and "the answer describes the working tree".
     """
-    return sorted(rel for rel in relink.tracked_files(root)
-                  if rel.endswith(".md") and relink.within(rel, scan_roots))
+    found = []
+    for base in roots:
+        start = os.path.join(root, base)
+        # A root may name one file. The rule file at the repository root is the clearest
+        # case: it points into the knowledge base constantly, and nothing else would
+        # bring it in.
+        if os.path.isfile(start) and base.endswith(".md"):
+            found.append(base.replace(os.sep, "/"))
+            continue
+        if not os.path.isdir(start):
+            continue
+        for dirpath, dirnames, filenames in os.walk(start):
+            dirnames[:] = sorted(d for d in dirnames
+                                 if d != ".git" and not d.startswith("."))
+            for name in sorted(filenames):
+                if name.endswith(".md") and not name.startswith("."):
+                    rel = os.path.relpath(os.path.join(dirpath, name), root)
+                    found.append(rel.replace(os.sep, "/"))
+    return sorted(set(found))
+
+
+def list_files(relink, root: str, roots: list[str], tracked: set) -> list[str]:
+    """Markdown under `roots`, minus what git ignores and minus templates.
+
+    The predicate is "git tracks it, or git is not told to ignore it" — a file git tracks
+    cannot be ignored, so only the remainder is worth asking about. That is not merely an
+    optimisation: asking about all 8 000 walked files costs over two seconds and answers
+    "none ignored" every time, on a command a status line runs every turn. The set of
+    tracked paths is used to skip the question, never to decide what is a node, so what
+    happens to be staged still cannot change the answer.
+
+    A template's links resolve only once it is copied to where it will live, so relink
+    leaves it alone; counting it here would make every template a permanent orphan and
+    let its placeholder links pose as edges.
+    """
+    found = walk_markdown(root, roots)
+    if not found:
+        return []
+    unknown = {rel for rel in found if rel not in tracked}
+    ignored = relink.ignored(root, unknown) if unknown else set()
+    return [rel for rel in found
+            if rel not in ignored and not relink.is_template(rel)]
 
 
 def file_hash(root: str, rel: str) -> str | None:
@@ -199,7 +267,7 @@ def extract(relink, root: str, rel: str) -> list:
     return targets
 
 
-def refresh(relink, root: str, nodes: list[str], state_dir: str, rebuild: bool,
+def refresh(relink, root: str, sources: list[str], state_dir: str, rebuild: bool,
             persist: bool = True) -> dict:
     """Re-extract only the files whose content changed since the last run.
 
@@ -209,17 +277,19 @@ def refresh(relink, root: str, nodes: list[str], state_dir: str, rebuild: bool,
     two different things.
     """
     cache_path = os.path.join(state_dir, "cache.json")
+    fingerprint = relink_fingerprint()
     cached = {}
     if not rebuild:
         try:
             with open(cache_path, "r", encoding="utf-8") as fh:
                 blob = json.load(fh)
-            if blob.get("version") == CACHE_VERSION:
+            if (blob.get("version") == CACHE_VERSION
+                    and blob.get("relink") == fingerprint):
                 cached = blob.get("files", {})
         except (OSError, ValueError):
             cached = {}
     files, recomputed = {}, 0
-    for rel in nodes:
+    for rel in sources:
         digest = file_hash(root, rel)
         if digest is None:
             continue
@@ -230,15 +300,24 @@ def refresh(relink, root: str, nodes: list[str], state_dir: str, rebuild: bool,
         files[rel] = {"hash": digest, "targets": extract(relink, root, rel)}
         recomputed += 1
     if persist:
-        write_json(cache_path, {"version": CACHE_VERSION, "files": files},
+        write_json(cache_path,
+                   {"version": CACHE_VERSION, "relink": fingerprint, "files": files},
                    sort_keys=True, separators=(",", ":"))
     return {"files": files, "recomputed": recomputed}
 
 
 # --- resolution --------------------------------------------------------------
 
-def resolve(relink, root: str, nodes: list[str], files: dict) -> dict:
-    """Turn cached targets into edges and dead links against the tree as it is now."""
+def resolve(relink, root: str, nodes: list[str], sources: list[str],
+            files: dict) -> dict:
+    """Turn cached targets into edges and dead links against the tree as it is now.
+
+    Sources and nodes are two different sets on purpose. A node is a knowledge file — the
+    thing that can be reported as unreachable. A source is anything whose links count as
+    a way of reaching one, which includes files that are not knowledge themselves: a
+    skill or a tool document pointing into the base makes its target reachable, and
+    calling that target an orphan would simply be false.
+    """
     node_set = set(nodes)
     seen: dict[str, bool] = {}
 
@@ -251,7 +330,7 @@ def resolve(relink, root: str, nodes: list[str], files: dict) -> dict:
     out: dict[str, list] = {}
     inbound: dict[str, list] = {}
     dead_candidates = []
-    for rel in nodes:
+    for rel in sources:
         record = files.get(rel)
         if not record:
             continue
@@ -261,15 +340,15 @@ def resolve(relink, root: str, nodes: list[str], files: dict) -> dict:
                 dead_candidates.append((rel, line, target, path, readings))
                 continue
             if hit.endswith(".md") and hit in node_set and hit != rel:
-                out.setdefault(rel, []).append((hit, line))
-                inbound.setdefault(hit, []).append((rel, line))
+                out.setdefault(rel, []).append((hit, line, EDGE_LINK))
+                inbound.setdefault(hit, []).append((rel, line, EDGE_LINK))
     # A target git is told to ignore exists on the station that produced it and nowhere
     # else, so its absence here does not make the link dead. relink asks git the same
     # question; asking it the same way is what keeps the two counts equal.
     asked = {r + ("/" if c[3].endswith("/") else "")
              for c in dead_candidates for r in c[4]}
     skip = {p.rstrip("/") for p in relink.ignored(root, asked)}
-    built = relink.generated(root, nodes)
+    built = relink.generated(root, sources)
     dead = []
     for rel, line, target, _path, readings in dead_candidates:
         if any(r in skip for r in readings):
@@ -347,6 +426,51 @@ def orphans(root: str, nodes: list[str], graph: dict, rules: dict) -> tuple[list
     return reported, waived
 
 
+# --- one build at a time -----------------------------------------------------
+
+def lock_path(state_dir: str) -> str:
+    return os.path.join(state_dir, LOCK_NAME)
+
+
+def take_lock(state_dir: str, stale_after: float) -> bool:
+    """Claim the right to build. False when somebody else already holds it.
+
+    Without this a cold start is a stampede: the status line renders every turn, finds no
+    cache every time because the first build has not finished yet, and launches another
+    full build on each render. The lock is a file created with O_EXCL, so the claim is
+    atomic; a stale one is reclaimed, because a build that died holding it must not keep
+    the graph from ever being built.
+    """
+    path = lock_path(state_dir)
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(int(time.time())).encode("ascii"))
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            age = time.time() - os.path.getmtime(path)
+        except OSError:
+            return False
+        if age <= stale_after:
+            return False
+        try:
+            os.unlink(path)
+        except OSError:
+            return False
+        return take_lock(state_dir, stale_after)
+    except OSError:
+        return False
+
+
+def drop_lock(state_dir: str) -> None:
+    try:
+        os.unlink(lock_path(state_dir))
+    except OSError:
+        pass
+
+
 # --- assembling the answer ---------------------------------------------------
 
 def build(config: dict, root: str, rebuild: bool = False,
@@ -358,9 +482,15 @@ def build(config: dict, root: str, rebuild: bool = False,
     rules = resolve_rules(config, root)
     state_dir = os.path.join(root, config.get("state_dir", "context/.graph"))
     started = time.time()
-    nodes = list_nodes(relink, root, config.get("scan_roots", []))
-    state = refresh(relink, root, nodes, state_dir, rebuild, persist)
-    graph = resolve(relink, root, nodes, state["files"])
+    tracked = set(relink.tracked_files(root))
+    nodes = list_files(relink, root, config.get("scan_roots", []), tracked)
+    # Files whose links count as a way in, even when they are not knowledge themselves.
+    extra = [rel for rel in list_files(relink, root, config.get("source_roots") or [],
+                                       tracked)
+             if rel not in set(nodes)]
+    sources = sorted(set(nodes) | set(extra))
+    state = refresh(relink, root, sources, state_dir, rebuild, persist)
+    graph = resolve(relink, root, nodes, sources, state["files"])
     elapsed = time.time() - started
     reported, waived = orphans(root, nodes, graph, rules)
     edges = sum(len(v) for v in graph["out"].values())
@@ -369,11 +499,11 @@ def build(config: dict, root: str, rebuild: bool = False,
         # Load-bearing, not decorative: crossing it means the base outgrew the number in
         # the config, and the session line is about to become something that is waited on.
         sys.stderr.write(
-            f"context-graph: budowa zajela {elapsed:.1f}s przy progu {budget}s — "
-            "podnies thresholds.build_seconds albo zawez scan_roots\n")
+            f"context-graph: build took {elapsed:.1f}s against a {budget}s budget — "
+            "raise thresholds.build_seconds or narrow scan_roots\n")
     result = {
         "root": root, "state_dir": state_dir, "rules": rules,
-        "nodes": nodes, "graph": graph,
+        "nodes": nodes, "sources": sources, "graph": graph,
         "orphans": reported, "waived": waived,
         "edges": edges, "dead": [d for d in graph["dead"] if d["reported"]],
         "dead_all": graph["dead"], "seconds": elapsed,
@@ -382,16 +512,18 @@ def build(config: dict, root: str, rebuild: bool = False,
     if not persist:
         return result
     write_json(os.path.join(state_dir, "graph.json"), {
-            "version": CACHE_VERSION,
-            "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "seconds": round(elapsed, 3),
-            "counts": {"nodes": len(nodes), "edges": edges,
-                       "orphans": len(reported), "waived": waived,
-                       "dead": len(result["dead"])},
-            "out": {k: v for k, v in sorted(graph["out"].items())},
-            "dead": result["dead"],
-            "orphan_paths": reported,
-        }, sort_keys=True, indent=1)
+        "version": CACHE_VERSION,
+        "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "seconds": round(elapsed, 3),
+        "counts": {"nodes": len(nodes), "sources": len(sources), "edges": edges,
+                   "orphans": len(reported), "waived": waived,
+                   "dead": len(result["dead"])},
+        "out": {k: [{"to": t, "line": ln, "type": ty} for t, ln, ty in v]
+                for k, v in sorted(graph["out"].items())},
+        "dead": result["dead"],
+        "orphan_paths": reported,
+    }, sort_keys=True, indent=1)
+    drop_lock(state_dir)
     return result
 
 
@@ -401,24 +533,25 @@ def cmd_links(state: dict, target: str) -> int:
     root = state["root"]
     rel = os.path.relpath(os.path.abspath(target), root).replace(os.sep, "/")
     if rel not in set(state["nodes"]):
-        print(f"`{rel}` nie nalezy do grafu — graf obejmuje pliki .md w skonfigurowanych "
-              f"zakresach ({', '.join(state['rules']['entity_scopes']) or 'brak'}).")
+        scopes = ", ".join(state["rules"]["entity_scopes"]) or "none configured"
+        print(f"`{rel}` is not in the graph — it covers .md files in the configured "
+              f"scopes ({scopes}).")
         return 0
     inbound = state["graph"]["in"].get(rel, [])
     outbound = state["graph"]["out"].get(rel, [])
     print(f"{rel}")
-    print(f"  wchodzace: {len(inbound)}")
-    for src, line in inbound:
-        print(f"    <- {src}:{line}")
-    print(f"  wychodzace: {len(outbound)}")
-    for dst, line in outbound:
-        print(f"    -> {dst} (linia {line})")
+    print(f"  inbound: {len(inbound)}")
+    for src, line, kind in inbound:
+        print(f"    <- {src}:{line} ({kind})")
+    print(f"  outbound: {len(outbound)}")
+    for dst, line, kind in outbound:
+        print(f"    -> {dst} (line {line}, {kind})")
     return 0
 
 
 def cmd_orphans(state: dict) -> int:
     reported = state["orphans"]
-    print(f"sieroty: {len(reported)}   zwolnione regula: {state['waived']}")
+    print(f"orphans: {len(reported)}   exempt by rule: {state['waived']}")
     for rel in reported:
         print(f"  {rel}")
     return 0
@@ -431,7 +564,7 @@ def bridge_pairs(state: dict) -> list:
         a = entity_of(src, scopes)
         if not a:
             continue
-        for dst, _line in edges:
+        for dst, _line, _kind in edges:
             b = entity_of(dst, scopes)
             if not b or b[0] == a[0]:
                 continue
@@ -443,21 +576,21 @@ def bridge_pairs(state: dict) -> list:
 def cmd_bridges(state: dict, limit: int) -> int:
     pairs = bridge_pairs(state)
     total = sum(n for _, n in pairs)
-    print(f"krawedzie miedzy encjami: {total} w {len(pairs)} parach")
+    print(f"edges between entities: {total} across {len(pairs)} pair(s)")
     for (a, b), count in pairs[:limit]:
         print(f"  {count:5d}  {a} <-> {b}")
     if len(pairs) > limit:
-        print(f"  ... i {len(pairs) - limit} dalszych par")
+        print(f"  ... and {len(pairs) - limit} more pair(s)")
     return 0
 
 
 def cmd_map(state: dict, limit: int) -> int:
     scopes = state["rules"]["entity_scopes"]
-    print(f"wezly: {len(state['nodes'])}   krawedzie: {state['edges']}   "
-          f"sieroty: {len(state['orphans'])} (zwolnione: {state['waived']})   "
-          f"martwe odnosniki: {len(state['dead'])}")
+    print(f"nodes: {len(state['nodes'])}   edges: {state['edges']}   "
+          f"orphans: {len(state['orphans'])} (exempt: {state['waived']})   "
+          f"dead links: {len(state['dead'])}")
     hubs = sorted(((len(v), k) for k, v in state["graph"]["in"].items()), reverse=True)
-    print(f"\nnajwieksze huby (wchodzace):")
+    print("\nbiggest hubs (inbound):")
     for count, rel in hubs[:limit]:
         print(f"  {count:5d}  {rel}")
     linked = set()
@@ -465,23 +598,90 @@ def cmd_map(state: dict, limit: int) -> int:
         linked.update((a, b))
     entities = sorted({e[0] for rel in state["nodes"] if (e := entity_of(rel, scopes))})
     alone = [e for e in entities if e not in linked]
-    print(f"\nencje bez powiazan na zewnatrz: {len(alone)} z {len(entities)}")
+    print(f"\nentities with no outside link: {len(alone)} of {len(entities)}")
     for name in alone:
         print(f"  {name}")
     return 0
 
 
-ABSENT_LINE = "context: grafu jeszcze nie ma — buduje sie w tle"
+def line_from_counts(counts: dict, fresh: str) -> str:
+    return (f"context: {counts['nodes']} nodes · {counts['edges']} edges · "
+            f"{counts['orphans']} orphans · {counts['dead']} dead links · {fresh}")
 
+
+def stats_line(state: dict) -> str:
+    fresh = "fresh" if state["recomputed"] == 0 else f"{state['recomputed']} recomputed"
+    return line_from_counts(
+        {"nodes": len(state["nodes"]), "edges": state["edges"],
+         "orphans": len(state["orphans"]), "dead": len(state["dead"])}, fresh)
+
+
+def cmd_stats(state: dict, one_line: bool) -> int:
+    if one_line:
+        print(stats_line(state))
+        return 0
+    print(stats_line(state))
+    print(f"  link sources outside the node scopes: "
+          f"{len(state['sources']) - len(state['nodes'])}")
+    print(f"  exempt by the self-indexing subtree rule: {state['waived']}")
+    print(f"  dead links in material put down (not reported): "
+          f"{len(state['dead_all']) - len(state['dead'])}")
+    print(f"  build: {state['seconds']:.2f}s, files re-extracted: {state['recomputed']}")
+    return 0
+
+
+def cmd_report(state: dict, limit: int) -> int:
+    path = os.path.join(state["state_dir"], "report.md")
+    outside = len(state["sources"]) - len(state["nodes"])
+    lines = [
+        "# Knowledge base link graph",
+        "",
+        f"Built {time.strftime('%Y-%m-%d %H:%M')} in {state['seconds']:.2f}s. "
+        "Generated and strictly local — it is not committed.",
+        "",
+        "| Measure | Value |",
+        "|---|---|",
+        f"| nodes (.md files in the scopes) | {len(state['nodes'])} |",
+        f"| link sources outside those scopes | {outside} |",
+        f"| edges (.md -> .md links) | {state['edges']} |",
+        f"| dead links (files read by default) | {len(state['dead'])} |",
+        f"| dead links in material put down | {len(state['dead_all']) - len(state['dead'])} |",
+        f"| orphans | {len(state['orphans'])} |",
+        f"| exempt by the self-indexing subtree rule | {state['waived']} |",
+        "",
+        "## Dead links",
+        "",
+    ]
+    if state["dead"]:
+        for item in state["dead"]:
+            lines.append(f"- `{item['path']}:{item['line']}` -> `{item['target']}`")
+    else:
+        lines.append("None.")
+    lines += ["", "## Biggest hubs", ""]
+    hubs = sorted(((len(v), k) for k, v in state["graph"]["in"].items()), reverse=True)
+    for count, rel in hubs[:limit]:
+        lines.append(f"- {count} inbound — `{rel}`")
+    lines += ["", "## Bridges between entities", ""]
+    for (a, b), count in bridge_pairs(state)[:limit]:
+        lines.append(f"- {count} — {a} <-> {b}")
+    lines += ["", "## Orphans", ""]
+    if state["orphans"]:
+        for rel in state["orphans"][:limit]:
+            lines.append(f"- `{rel}`")
+        if len(state["orphans"]) > limit:
+            lines.append(f"- ... and {len(state['orphans']) - limit} more")
+    else:
+        lines.append("None.")
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"report: {os.path.relpath(path, state['root']).replace(os.sep, '/')}")
+    return 0
+
+
+# --- the cold path -----------------------------------------------------------
 
 def start_background_build(config_path: str, root: str) -> None:
-    """Build the graph in a process nobody waits for.
-
-    A status line renders on every turn, so a first build over thousands of files must
-    never be something a prompt waits behind. Detached, the cost is paid once and the
-    next render answers from the cache — which is why this says "not yet" rather than
-    "none": the next call will have it.
-    """
+    """Build the graph in a process nobody waits for."""
     flags = {}
     if os.name == "nt":
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — no console, no signal inheritance
@@ -498,95 +698,50 @@ def start_background_build(config_path: str, root: str) -> None:
         pass            # a status line that cannot spawn simply stays quiet next turn
 
 
-def cache_file(config: dict, root: str) -> str:
-    return os.path.join(root, config.get("state_dir", "context/.graph"), "cache.json")
+def state_file(config: dict, root: str, name: str) -> str:
+    return os.path.join(root, config.get("state_dir", "context/.graph"), name)
 
 
 def is_cold(config: dict, root: str) -> bool:
-    return not os.path.exists(cache_file(config, root))
+    return not os.path.exists(state_file(config, root, "cache.json"))
 
 
-def await_build(config: dict, root: str, budget: float) -> bool:
-    """Wait for a detached build to land, up to the budget. True when it did.
+def await_graph(path: str, budget: float) -> dict | None:
+    """Wait for a detached build to publish its counts, up to the budget.
+
+    Waiting on `graph.json` rather than on the cache is what keeps the first call from
+    doing the work twice: the counts are already in that file, so there is nothing left
+    to compute once it appears.
+    """
+    deadline = time.time() + budget
+    while True:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                blob = json.load(fh)
+            if blob.get("version") == CACHE_VERSION and "counts" in blob:
+                return blob
+        except (OSError, ValueError):
+            pass
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.2)
+
+
+def cold_line(config: dict, root: str, config_path: str) -> None:
+    """Print the one-line answer on a cold start.
 
     The budget is what the repository declares it will tolerate on a first build, and it
     is the whole answer to "build it or say it is missing": under it, the caller gets real
     numbers on this very call; over it, the line says the graph is not there yet and the
-    build keeps going for the next one. Either way nobody waits longer than the number in
+    build carries on for the next one. Either way nobody waits longer than the number in
     the config.
     """
-    path = cache_file(config, root)
-    deadline = time.time() + budget
-    while time.time() < deadline:
-        if os.path.exists(path):
-            return True
-        time.sleep(0.2)
-    return os.path.exists(path)
-
-
-def stats_line(state: dict) -> str:
-    fresh = "swiezy" if state["recomputed"] == 0 else f"przeliczono {state['recomputed']}"
-    return (f"context: {len(state['nodes'])} wezly · {state['edges']} krawedzi · "
-            f"{len(state['orphans'])} sierot · {len(state['dead'])} martwych linkow "
-            f"· {fresh}")
-
-
-def cmd_stats(state: dict, one_line: bool) -> int:
-    if one_line:
-        print(stats_line(state))
-        return 0
-    print(stats_line(state))
-    print(f"  zwolnione regula poddrzewa: {state['waived']}")
-    print(f"  martwe odnosniki w materiale odlozonym (nieraportowane): "
-          f"{len(state['dead_all']) - len(state['dead'])}")
-    print(f"  budowa: {state['seconds']:.2f}s, przeliczonych plikow: {state['recomputed']}")
-    return 0
-
-
-def cmd_report(state: dict, limit: int) -> int:
-    path = os.path.join(state["state_dir"], "report.md")
-    lines = [
-        "# Graf powiazan bazy wiedzy",
-        "",
-        f"Zbudowany {time.strftime('%Y-%m-%d %H:%M')} w {state['seconds']:.2f}s. "
-        "Plik jest generowany i nieusuwalnie lokalny — nie commituje sie go.",
-        "",
-        "| Miara | Wartosc |",
-        "|---|---|",
-        f"| wezly (pliki .md w zakresach) | {len(state['nodes'])} |",
-        f"| krawedzie (odnosniki .md -> .md) | {state['edges']} |",
-        f"| martwe odnosniki (pliki czytane domyslnie) | {len(state['dead'])} |",
-        f"| martwe odnosniki w materiale odlozonym | {len(state['dead_all']) - len(state['dead'])} |",
-        f"| sieroty | {len(state['orphans'])} |",
-        f"| zwolnione regula poddrzewa | {state['waived']} |",
-        "",
-        "## Martwe odnosniki",
-        "",
-    ]
-    if state["dead"]:
-        for item in state["dead"]:
-            lines.append(f"- `{item['path']}:{item['line']}` -> `{item['target']}`")
-    else:
-        lines.append("Brak.")
-    lines += ["", "## Najwieksze huby", ""]
-    hubs = sorted(((len(v), k) for k, v in state["graph"]["in"].items()), reverse=True)
-    for count, rel in hubs[:limit]:
-        lines.append(f"- {count} wejsc — `{rel}`")
-    lines += ["", "## Mosty miedzy encjami", ""]
-    for (a, b), count in bridge_pairs(state)[:limit]:
-        lines.append(f"- {count} — {a} <-> {b}")
-    lines += ["", "## Sieroty", ""]
-    if state["orphans"]:
-        for rel in state["orphans"][:limit]:
-            lines.append(f"- `{rel}`")
-        if len(state["orphans"]) > limit:
-            lines.append(f"- ... i {len(state['orphans']) - limit} dalszych")
-    else:
-        lines.append("Brak.")
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n".join(lines) + "\n")
-    print(f"raport: {os.path.relpath(path, state['root']).replace(os.sep, '/')}")
-    return 0
+    state_dir = os.path.join(root, config.get("state_dir", "context/.graph"))
+    budget = float((config.get("thresholds") or {}).get("build_seconds") or 0)
+    if take_lock(state_dir, stale_after=max(budget * 3, 60)):
+        start_background_build(config_path, root)
+    blob = await_graph(state_file(config, root, "graph.json"), budget)
+    print(ABSENT_LINE if blob is None else line_from_counts(blob["counts"], "fresh"))
 
 
 # --- entry point -------------------------------------------------------------
@@ -600,31 +755,31 @@ def main(argv: list[str]) -> int:
     # instead of the subcommand's default silently overwriting the top level's value.
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default=argparse.SUPPRESS,
-                        help="sciezka do config.yaml (domyslnie: obok skryptu)")
+                        help="path to config.yaml (default: next to this script)")
     common.add_argument("--root", default=argparse.SUPPRESS,
-                        help="korzen repozytorium (domyslnie: git rev-parse)")
+                        help="repository root (default: git rev-parse)")
     common.add_argument("--rebuild", action="store_true", default=argparse.SUPPRESS,
-                        help="policz wszystko od nowa, z pominieciem cache'u")
+                        help="recompute everything, ignoring the cache")
     common.add_argument("--limit", type=int, default=argparse.SUPPRESS,
-                        help="ile pozycji wypisac na liste (domyslnie 15)")
+                        help="how many rows a list prints (default 15)")
     parser = argparse.ArgumentParser(
         prog="context-graph", parents=[common],
-        description="Graf jawnych odnosnikow miedzy plikami bazy wiedzy.")
+        description="The explicit link graph between knowledge base files.")
     sub = parser.add_subparsers(dest="command", required=True)
     p_links = sub.add_parser("links", parents=[common],
-                             help="odnosniki wchodzace i wychodzace pliku")
+                             help="inbound and outbound links of one file")
     p_links.add_argument("file")
     sub.add_parser("orphans", parents=[common],
-                   help="pliki bez ani jednego odnosnika wchodzacego")
+                   help="files with no inbound link at all")
     sub.add_parser("bridges", parents=[common],
-                   help="krawedzie miedzy encjami, po parach encji")
+                   help="edges crossing an entity boundary, by entity pair")
     sub.add_parser("map", parents=[common],
-                   help="rozklad wielkosci: wezly, krawedzie, huby, encje")
-    p_stats = sub.add_parser("stats", parents=[common], help="stan grafu")
+                   help="size distribution: nodes, edges, hubs, entities")
+    p_stats = sub.add_parser("stats", parents=[common], help="state of the graph")
     p_stats.add_argument("--line", action="store_true",
-                         help="jedno zdanie, do linii statusu i hooka sesji")
+                         help="one sentence, for a status line or session hook")
     sub.add_parser("report", parents=[common],
-                   help="zapisz raport markdown w katalogu stanu")
+                   help="write the Markdown report into the state directory")
     args = parser.parse_args(argv)
     config_path = getattr(args, "config", DEFAULT_CONFIG)
     limit = getattr(args, "limit", 15)
@@ -637,11 +792,8 @@ def main(argv: list[str]) -> int:
     # form is on a render path, so only it refuses to wait.
     if (args.command == "stats" and getattr(args, "line", False)
             and not getattr(args, "rebuild", False) and is_cold(config, root)):
-        start_background_build(config_path, root)
-        budget = (config.get("thresholds") or {}).get("build_seconds") or 0
-        if not await_build(config, root, float(budget)):
-            print(ABSENT_LINE)
-            return 0          # still building; the next call answers from the cache
+        cold_line(config, root, config_path)
+        return 0
     state = build(config, root, rebuild=getattr(args, "rebuild", False))
     if state is None:
         return 0
@@ -654,7 +806,7 @@ def main(argv: list[str]) -> int:
     if args.command == "map":
         return cmd_map(state, limit)
     if args.command == "stats":
-        return cmd_stats(state, args.line)
+        return cmd_stats(state, getattr(args, "line", False))
     if args.command == "report":
         return cmd_report(state, limit)
     return 2

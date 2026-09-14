@@ -52,9 +52,28 @@ root**; the first hit wins. A link carrying a `#section` anchor is an edge to th
 headings are not separate nodes, because in a base of this size they were 12 links in
 11 345. External `http`/`https` targets are not edges and are never reported.
 
-Nodes are the **tracked** `.md` files inside `scan_roots`. Untracked means somebody's work
-in progress, and tracking is also what keeps this tool and relink talking about the same
-set of files.
+Every edge carries a **type**, today always `link`. It is spelled out rather than assumed
+so that adding a second source of edges later — co-occurrence in a commit, say — is an
+addition instead of a rewrite of everything that reads the graph.
+
+## Nodes and sources are two different sets
+
+A **node** is a knowledge file: something the graph answers about, and something that can
+be reported as unreachable. Nodes come from `scan_roots`.
+
+A **source** is anything whose links count as a way of reaching a node, without being
+knowledge itself — a rules file, a skill, a tooling document. Sources come from
+`source_roots`, and a root there may name a single `.md` file rather than a directory. A
+file reachable only from a skill is reachable; calling it an orphan would simply be false.
+
+The file list is the **working tree**, not `git ls-files`. The index would make the answer
+depend on what happens to be staged: a newly created file would appear the moment it was
+staged, and a deletion not yet staged would keep a file in the list that is no longer on
+disk. The linter's contract is that its result does not depend on the staging area, and a
+walk is the only source of truth that honours both that and "the answer describes the
+working tree". Git is still asked which files it ignores — but only about files it does
+not already track, because a tracked file cannot be ignored, and asking about all of them
+costs seconds on a command that runs every turn.
 
 ## The orphan exemption
 
@@ -63,13 +82,13 @@ indexes itself — a directory holding the `self_index_marker` file — and the 
 **stops at the entity root**. A scope-level index does not exempt anything: it lists
 entities, not their internals.
 
-That boundary is the whole rule. Measured three ways on a live base of 8 227 files:
+That boundary is the whole rule. Measured three ways on a live base of 8 219 files:
 
 | Where the index has to be | Exempts | Left to report |
 |---|---|---|
 | in the file's own directory | 2% | ~6 300 — useless |
 | in any ancestor at all | 100% | ~30 — useless the other way |
-| **in an ancestor below the entity root** | **~6 300** | **~180** |
+| **in an ancestor below the entity root** | **~6 300** | **~170** |
 
 Directories the linter already excludes from per-file cataloguing are exempt here too, for
 the same reason: they are referenced as a folder, not file by file.
@@ -84,26 +103,28 @@ Passed at invocation; the copy next to the script is a neutral default.
 
 | Key | Meaning |
 |---|---|
-| `scan_roots` | where `.md` files are looked for |
+| `scan_roots` | where nodes are looked for |
+| `source_roots` | files whose links count as a way in, without being nodes |
 | `state_dir` | where the graph, hash cache and report are written |
 | `lint_config` | the linter config to borrow the scope and exemption rules from |
 | `self_index_marker`, `exclude_dirs`, `entity_scopes` | inline fallbacks, used only when `lint_config` cannot be read |
-| `thresholds.build_seconds` | how long a build may take before the tool says the number is too low |
+| `thresholds.build_seconds` | how long a first build may be waited for |
 
 The exemption rule and the scope boundaries are **borrowed from the linter's config** in a
 repository that runs one, rather than restated here — a second copy would drift the first
 time somebody adds a directory to one of them, and the linter's orphan check has to report
-exactly what `orphans` reports.
+exactly what `orphans` reports. A value there is read as configured: an explicitly empty
+exclusion list means "exclude nothing", not "unset, use the fallback".
 
 ## Cost, and why nothing is committed
 
-Measured on a base of 8 227 files and 10 876 edges:
+Measured on a base of 8 219 nodes, 344 further link sources and 11 025 edges:
 
 | | Time |
 |---|---|
-| cold build (`--rebuild`) | **~4.9 s** |
-| warm call (nothing changed) | **~1.9 s** |
-| one file changed | ~1.9 s, one file re-extracted |
+| cold build (`--rebuild`) | **~5.8 s** |
+| warm call (nothing changed) | **~2.2 s** |
+| one file changed | ~2.2 s, one file re-extracted |
 | cold `stats --line` | the build, or `build_seconds` — whichever comes first |
 
 Recomputation is keyed on a **content hash**, not a modification time: a checkout can
@@ -112,18 +133,26 @@ exist. What is cached per file is what that file alone determines — where each
 points. Whether the target *exists* is resolved fresh every run, because it depends on
 other files, which change without changing this one.
 
+The cache also carries a fingerprint of `relink.py`. The targets in it were extracted by
+relink's rules, so those rules are part of what the cache depends on: change how a code
+span is masked or a target resolved, and every unchanged file would otherwise keep serving
+its old answer — a graph quietly disagreeing with the check that shares its definition.
+The fingerprint turns that into a single full rebuild.
+
 `stats --line` never waits longer than the repository said it would. Finding no cache, it
 starts the build in a **detached** process and waits for it — but only up to
 `thresholds.build_seconds`. Under that, the call answers with real numbers. Over it, the
 line says the graph is not there yet and returns; the build carries on, and the next call
-answers from the cache. So the threshold is the one number that decides between "build it"
-and "say it is missing", and a status line — which renders every turn — can never hang for
-longer than the figure somebody wrote down on purpose.
+answers from the cache. A session hook wired to this command therefore needs a timeout
+**above** that budget, or it gets killed before it can print either answer.
 
-The cache and the graph are written to a temporary file and renamed over the target, because
-the waiting call is reading a file another process is writing: a rename is atomic, and a
-half-written cache read as complete would be a wrong answer that sticks until something
-else changes.
+Only one build runs at a time. The right to start one is claimed by creating a lock file
+with `O_EXCL`, so the claim is atomic and a status line rendering every turn cannot
+stampede a cold repository with one full build per render. A lock left behind by a build
+that died is reclaimed once it goes stale. The cache and the graph are written to a
+temporary file and renamed over the target, because the waiting call is reading a file
+another process is writing: a rename is atomic, and a half-written cache read as complete
+would be a wrong answer that sticks.
 
 **The state directory is never committed.** The graph is fully reproducible from files
 that *are* in the repository, so history carries the cause rather than the effect — and a

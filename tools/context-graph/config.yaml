@@ -11,6 +11,11 @@
 scan_roots:
   - context
 
+# Link sources that are NOT nodes: files whose links make a node reachable without being
+# knowledge themselves — rules, skills, tooling docs. Left empty by default, because a
+# fresh repository has nowhere to point from yet. A root may name a single .md file.
+source_roots: []
+
 # Graph, hash cache and report. Expected to be ignored by git: the graph is fully
 # reproducible from the files that ARE in the repository, so history carries the cause
 # and not the effect — and a committed state file would be a conflict factory in a
@@ -40,6 +45,8 @@ entity_scopes:
   - context/projects
 
 thresholds:
-  # How long a first build may take before `stats --line` reports the graph as absent
-  # instead of waiting. A status line must never be the reason a prompt hangs.
+  # How long a first build may take before `stats --line` stops waiting and reports the
+  # graph as absent instead. A status line must never be the reason a prompt hangs. Any
+  # session hook wired to this command needs a timeout ABOVE this number, or it is killed
+  # before the command can print either answer.
   build_seconds: 30
