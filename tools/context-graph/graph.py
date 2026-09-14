@@ -66,6 +66,9 @@ CACHE_VERSION = 2
 # everything that reads the graph.
 EDGE_LINK = "link"
 LOCK_NAME = "building.lock"
+# Where state goes when a config does not say. Needed on one path where the config is
+# exactly what could not be read — the detached build still owes its lock back.
+DEFAULT_STATE_DIR = "context/.graph"
 ABSENT_LINE = "context: no graph yet — building in the background"
 
 
@@ -222,6 +225,26 @@ def skipped(relink, rel: str, built: set) -> bool:
     return relink.is_template(rel) or rel in built
 
 
+def untracked_markdown(root: str) -> set[str]:
+    """New `.md` files git can already see: on disk, not ignored, not yet added.
+
+    `git ls-files` reads the **index**, so a file written and not yet added is missing
+    from it and appears the instant it is staged. Every set derived from it inherits
+    that: reachability would answer differently for a working tree that did not change,
+    which is the one thing the linter's determinism contract rules out. Asking git for
+    what it calls "others" closes the gap — before `git add` the file is here, after it
+    is in the tracked set, and the union is the same either way. One extra call, and it
+    honours `.gitignore`, so a vendored directory full of Markdown never enters.
+    """
+    out = subprocess.run(["git", "-C", root, "ls-files", "--others",
+                          "--exclude-standard", "-z", "--", "*.md"],
+                         capture_output=True, encoding="utf-8",
+                         errors="surrogateescape")
+    if out.returncode != 0:
+        return set()                  # not a git checkout: the walk is all there is
+    return {p for p in out.stdout.split("\0") if p}
+
+
 def list_nodes(relink, root: str, roots: list[str], tracked: set,
                built: set) -> list[str]:
     """The knowledge files: Markdown under `roots`, as the working tree has it.
@@ -232,6 +255,12 @@ def list_nodes(relink, root: str, roots: list[str], tracked: set,
     and answers "none ignored" every time, on a command a status line runs every turn. The
     tracked set is used to skip the question, never to decide what is a node, so what
     happens to be staged still cannot change the answer.
+
+    Membership in a git listing is deliberately not the test, and the reason is a
+    measurement: 28 files under a directory with a non-ASCII name came back from
+    `ls-files` spelled in a different encoding than the walk produced, so a node set
+    defined as "what git listed" silently lost them. Existence is a fact about the disk;
+    git is asked only the question the disk cannot answer, which is what it ignores.
     """
     found = walk_markdown(root, roots)
     if not found:
@@ -242,8 +271,8 @@ def list_nodes(relink, root: str, roots: list[str], tracked: set,
             if rel not in ignored and not skipped(relink, rel, built)]
 
 
-def list_sources(relink, tracked: set, built: set) -> list[str]:
-    """Every file whose links relink would scan — the graph reads exactly the same set.
+def list_sources(relink, visible: set, built: set) -> list[str]:
+    """Every file whose links can reach a node — the set relink scans, read git's way.
 
     Not a configured list of directories. That was tried and it is the wrong shape: any
     such list is a guess at where links live, and on a real base a carefully written one
@@ -252,8 +281,15 @@ def list_sources(relink, tracked: set, built: set) -> list[str]:
     graph while the linter reports it, which is precisely the disagreement the shared
     definition exists to rule out. Asking "what does relink scan" has no such gap by
     construction.
+
+    Read from everything git can see rather than from the index alone, for the reason
+    `untracked_markdown` gives: a new skill pointing into the base makes its target
+    reachable the moment it is written, and `git add` must not be what decides whether
+    the orphan check agrees. Dead links are the other way round and stay keyed on the
+    index — see `reportable`, which has to match a count the linter prints beside this
+    one.
     """
-    return sorted(rel for rel in tracked
+    return sorted(rel for rel in visible
                   if rel.endswith(".md") and not relink.sealed(rel)
                   and not skipped(relink, rel, built))
 
@@ -460,39 +496,60 @@ def lock_path(state_dir: str) -> str:
     return os.path.join(state_dir, LOCK_NAME)
 
 
-def take_lock(state_dir: str, stale_after: float) -> bool:
-    """Claim the right to build. False when somebody else already holds it.
+def new_token() -> str:
+    """The identity of one build, written into the lock file it holds."""
+    return f"{os.getpid()}-{time.time_ns()}"
+
+
+def take_lock(state_dir: str, stale_after: float) -> str | None:
+    """Claim the right to build: the token of the claim, or None if somebody holds it.
 
     Without this a cold start is a stampede: the status line renders every turn, finds no
     cache every time because the first build has not finished yet, and launches another
     full build on each render. The lock is a file created with O_EXCL, so the claim is
     atomic; a stale one is reclaimed, because a build that died holding it must not keep
     the graph from ever being built.
+
+    The token is what makes reclaiming safe. Age cannot tell a dead build from a slow
+    one, so a build that outruns the stale threshold has its lock taken from under it —
+    and if releasing were unconditional, that build would then delete the lock of the
+    one that replaced it, and the next render would start a third against the same
+    directory. A release that checks the token first does nothing at all in that case.
     """
     path = lock_path(state_dir)
+    token = new_token()
     try:
         os.makedirs(state_dir, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(int(time.time())).encode("ascii"))
+        os.write(fd, token.encode("ascii"))
         os.close(fd)
-        return True
+        return token
     except FileExistsError:
         try:
             age = time.time() - os.path.getmtime(path)
         except OSError:
-            return False
+            return None
         if age <= stale_after:
-            return False
+            return None
         try:
             os.unlink(path)
         except OSError:
-            return False
+            return None
         return take_lock(state_dir, stale_after)
     except OSError:
-        return False
+        return None
 
 
-def drop_lock(state_dir: str) -> None:
+def drop_lock(state_dir: str, token: str) -> None:
+    """Give the lock back, but only while it is still the one this build took."""
+    try:
+        with open(lock_path(state_dir), "r", encoding="ascii",
+                  errors="replace") as fh:
+            held = fh.read().strip()
+    except OSError:
+        return               # no lock to give back
+    if held != token:
+        return               # reclaimed as stale and handed on: not ours to remove
     try:
         os.unlink(lock_path(state_dir))
     except OSError:
@@ -502,22 +559,25 @@ def drop_lock(state_dir: str) -> None:
 # --- assembling the answer ---------------------------------------------------
 
 def build(config: dict, root: str, rebuild: bool = False,
-          persist: bool = True, release_lock: bool = False) -> dict | None:
+          persist: bool = True) -> dict | None:
     relink = load_relink()
     if relink is None:
         sys.stderr.write(f"context-graph: relink.py could not be loaded ({RELINK_PATH})\n")
         return None
     rules = resolve_rules(config, root)
-    state_dir = os.path.join(root, config.get("state_dir", "context/.graph"))
+    state_dir = os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR))
     started = time.time()
     tracked = set(relink.tracked_files(root))
+    # Everything git can see, index or working tree. Which of the two a new file is in
+    # depends on whether somebody has run `git add`, and no answer here may.
+    visible = tracked | untracked_markdown(root)
     walked = walk_markdown(root, config.get("scan_roots", []))
     # One question to git about build output, over everything either set can contain.
-    built = relink.generated(root, sorted(set(walked) | {r for r in tracked
-                                                        if r.endswith(".md")}))
+    built = relink.generated(root, sorted(set(walked) | {r for r in visible
+                                                         if r.endswith(".md")}))
     nodes = list_nodes(relink, root, config.get("scan_roots", []), tracked, built)
     # Anything whose links make a node reachable, without being knowledge itself.
-    sources = sorted(set(nodes) | set(list_sources(relink, tracked, built)))
+    sources = sorted(set(nodes) | set(list_sources(relink, visible, built)))
     state = refresh(relink, root, sources, state_dir, rebuild, persist)
     graph = resolve(relink, root, nodes, sources, state["files"], tracked)
     elapsed = time.time() - started
@@ -552,11 +612,6 @@ def build(config: dict, root: str, rebuild: bool = False,
         "dead": result["dead"],
         "orphan_paths": reported,
     }, sort_keys=True, indent=1)
-    # Only the build that was launched holding the lock releases it. A concurrent `map`
-    # or `orphans` builds without one, and dropping it here would free a lock belonging
-    # to a detached build still running — letting the next status line start a second.
-    if release_lock:
-        drop_lock(state_dir)
     return result
 
 
@@ -738,13 +793,15 @@ def cmd_report(state: dict, limit: int) -> int:
 
 # --- the cold path -----------------------------------------------------------
 
-def start_background_build(config_path: str, root: str, state_dir: str) -> None:
+def start_background_build(config_path: str, root: str, state_dir: str,
+                           token: str) -> None:
     """Build the graph in a process nobody waits for.
 
-    The child is told to release the lock, because the parent took it: ownership travels
-    with the build, not with whoever happens to finish a build next. If the spawn fails
-    the lock is dropped here and now — otherwise every later call would wait out the full
-    budget and report the graph missing while nothing at all was building.
+    The child is handed the parent's token and releases the lock on every way out of
+    its own process, not only on the way out through a build that worked: ownership
+    travels with the build, and a build that cannot even read the config still owes the
+    lock back. If the spawn fails the lock is dropped here and now — otherwise every
+    later call would wait out the full budget while nothing at all was building.
     """
     flags = {}
     if os.name == "nt":
@@ -754,16 +811,16 @@ def start_background_build(config_path: str, root: str, state_dir: str) -> None:
         flags["start_new_session"] = True
     try:
         subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "report", "--release-lock",
-             "--config", config_path, "--root", root],
+            [sys.executable, os.path.abspath(__file__), "report",
+             "--release-lock", token, "--config", config_path, "--root", root],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, cwd=root, **flags)
     except OSError:
-        drop_lock(state_dir)
+        drop_lock(state_dir, token)
 
 
 def state_file(config: dict, root: str, name: str) -> str:
-    return os.path.join(root, config.get("state_dir", "context/.graph"), name)
+    return os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR), name)
 
 
 def is_cold(config: dict, root: str) -> bool:
@@ -786,41 +843,61 @@ def is_cold(config: dict, root: str) -> bool:
                 and blob.get("relink") == relink_fingerprint())
 
 
+def read_graph(path: str) -> dict | None:
+    """The counts a build published, or None when there is nothing usable to read."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return blob if blob.get("version") == CACHE_VERSION and "counts" in blob else None
+
+
 def await_graph(path: str, budget: float) -> dict | None:
     """Wait for a detached build to publish its counts, up to the budget.
 
     Waiting on `graph.json` rather than on the cache is what keeps the first call from
     doing the work twice: the counts are already in that file, so there is nothing left
-    to compute once it appears.
+    to compute once it appears. Only ever called when there was nothing to read — an
+    artefact already on disk is never waited for, and never called fresh.
     """
     deadline = time.time() + budget
     while True:
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                blob = json.load(fh)
-            if blob.get("version") == CACHE_VERSION and "counts" in blob:
-                return blob
-        except (OSError, ValueError):
-            pass
+        blob = read_graph(path)
+        if blob is not None:
+            return blob
         if time.time() >= deadline:
             return None
         time.sleep(0.2)
 
 
 def cold_line(config: dict, root: str, config_path: str) -> None:
-    """Print the one-line answer on a cold start.
+    """Print the one-line answer when answering otherwise means a full build.
 
     The budget is what the repository declares it will tolerate on a first build, and it
     is the whole answer to "build it or say it is missing": under it, the caller gets real
     numbers on this very call; over it, the line says the graph is not there yet and the
     build carries on for the next one. Either way nobody waits longer than the number in
     the config.
+
+    Cold does not always mean empty. A cache discarded for its version or its `relink.py`
+    fingerprint leaves the last build's `graph.json` behind, and those counts are worth
+    printing — they are simply not fresh, and printing them under the word `fresh` is the
+    one thing this line must never do, since a rebuild was just launched precisely
+    because they are out of date. They go out at once, labelled as being rebuilt, and
+    the next call reads the new ones.
     """
-    state_dir = os.path.join(root, config.get("state_dir", "context/.graph"))
+    state_dir = os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR))
     budget = float((config.get("thresholds") or {}).get("build_seconds") or 0)
-    if take_lock(state_dir, stale_after=max(budget * 3, 60)):
-        start_background_build(config_path, root, state_dir)
-    blob = await_graph(state_file(config, root, "graph.json"), budget)
+    path = state_file(config, root, "graph.json")
+    published = read_graph(path)          # read before the rebuild can replace it
+    token = take_lock(state_dir, stale_after=max(budget * 3, 60))
+    if token:
+        start_background_build(config_path, root, state_dir, token)
+    if published is not None:
+        print(line_from_counts(published["counts"], "rebuilding"))
+        return
+    blob = await_graph(path, budget)
     print(ABSENT_LINE if blob is None else line_from_counts(blob["counts"], "fresh"))
 
 
@@ -840,8 +917,8 @@ def main(argv: list[str]) -> int:
                         help="repository root (default: git rev-parse)")
     common.add_argument("--rebuild", action="store_true", default=argparse.SUPPRESS,
                         help="recompute everything, ignoring the cache")
-    common.add_argument("--release-lock", action="store_true", default=argparse.SUPPRESS,
-                        help=argparse.SUPPRESS)   # internal: this build holds the lock
+    common.add_argument("--release-lock", metavar="TOKEN", default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)   # internal: the token this build holds
     common.add_argument("--limit", type=int, default=argparse.SUPPRESS,
                         help="how many rows a list prints (default 15)")
     parser = argparse.ArgumentParser(
@@ -866,33 +943,49 @@ def main(argv: list[str]) -> int:
     config_path = getattr(args, "config", DEFAULT_CONFIG)
     limit = getattr(args, "limit", 15)
 
+    # Set only on the detached build the cold path spawned. This process holds the lock
+    # and owes it back on EVERY way out, not only on the way out through a build that
+    # worked: a config that cannot be read, a relink that will not load, an exception
+    # halfway through — each used to end the process before the release and leave the
+    # lock standing until it went stale, with every status line in between waiting out
+    # the full budget for a build that was no longer running.
+    token = getattr(args, "release_lock", None)
     config = load_config(config_path)
     if config is None:
+        if token:
+            # The one path with no config to read `state_dir` from, so the default is
+            # the best that can be done; a wrong guess unlinks nothing.
+            drop_lock(os.path.join(repo_root(getattr(args, "root", None)),
+                                   DEFAULT_STATE_DIR), token)
         return 0            # no config: this repository has no graph, so say nothing
     root = repo_root(getattr(args, "root", None))
-    # Checked before building, because the point is not to build now: only the one-line
-    # form is on a render path, so only it refuses to wait.
-    if (args.command == "stats" and getattr(args, "line", False)
-            and not getattr(args, "rebuild", False) and is_cold(config, root)):
-        cold_line(config, root, config_path)
-        return 0
-    state = build(config, root, rebuild=getattr(args, "rebuild", False),
-                  release_lock=getattr(args, "release_lock", False))
-    if state is None:
-        return 0
-    if args.command == "links":
-        return cmd_links(state, args.file)
-    if args.command == "orphans":
-        return cmd_orphans(state, limit)
-    if args.command == "bridges":
-        return cmd_bridges(state, limit)
-    if args.command == "map":
-        return cmd_map(state, limit)
-    if args.command == "stats":
-        return cmd_stats(state, getattr(args, "line", False))
-    if args.command == "report":
-        return cmd_report(state, limit)
-    return 2
+    try:
+        # Checked before building, because the point is not to build now: only the
+        # one-line form is on a render path, so only it refuses to wait.
+        if (args.command == "stats" and getattr(args, "line", False)
+                and not getattr(args, "rebuild", False) and is_cold(config, root)):
+            cold_line(config, root, config_path)
+            return 0
+        state = build(config, root, rebuild=getattr(args, "rebuild", False))
+        if state is None:
+            return 0
+        if args.command == "links":
+            return cmd_links(state, args.file)
+        if args.command == "orphans":
+            return cmd_orphans(state, limit)
+        if args.command == "bridges":
+            return cmd_bridges(state, limit)
+        if args.command == "map":
+            return cmd_map(state, limit)
+        if args.command == "stats":
+            return cmd_stats(state, getattr(args, "line", False))
+        if args.command == "report":
+            return cmd_report(state, limit)
+        return 2
+    finally:
+        if token:
+            drop_lock(os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR)),
+                      token)
 
 
 if __name__ == "__main__":

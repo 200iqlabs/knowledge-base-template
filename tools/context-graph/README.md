@@ -65,7 +65,8 @@ A **source** is anything whose links count as a way of reaching a node, without 
 knowledge itself — a rules file, a skill, a tooling document. A file reachable only from a
 skill is reachable; calling it an orphan would simply be false.
 
-**Sources are not configured.** They are exactly what relink scans: every tracked `.md`
+**Sources are not configured.** They are exactly what relink scans, read git's way rather
+than the index's: every `.md` git can see — tracked, or untracked and not ignored —
 outside sealed material, minus templates and build output. A configured list of roots was
 tried for one round and is the wrong shape — any such list is a guess at where links live,
 and on a real base a carefully written one still missed 189 files relink reads: generated
@@ -78,15 +79,26 @@ the **working tree** under `scan_roots`, not `git ls-files`: the index would mak
 answer depend on what happens to be staged — a new file appearing the moment it was
 staged, a deletion not yet staged keeping a file that is no longer on disk. The linter's
 contract is that its result does not depend on the staging area, and a walk is the only
-source of truth that honours both that and "the answer describes the working tree". Git is
-still asked which files it ignores, but only about files it does not already track: a
-tracked file cannot be ignored, and asking about all of them costs seconds on a command
-that runs every turn.
+source of truth that honours both that and "the answer describes the working tree".
 
-The two sets differ, then, and only in one direction: a node may be untracked, a source
-never is. That is why an untracked file can be reported as an orphan but never as a dead
-link — reachability is this tool's own question, while the dead-link count is shown beside
-the linter's and has to be the same number.
+**Neither set is read from the index alone**, and for the same reason. `git ls-files`
+answers about the index, so a file written and not yet added is missing from it and
+appears the instant somebody runs `git add` — which would make `git add` the thing that
+decides whether a new skill pointing into the base counts as reaching it. The source set
+is therefore the union of what git tracks and what git calls *others* (untracked, not
+ignored): a new file is in one of the two either way, so staging moves it between them
+and changes no answer. Nodes reach the same end from the other side — the walk finds
+them, and git is asked only what it ignores, and only about files it does not already
+track. Membership in a git listing is not the test there, because it cannot be: 28 files
+under a directory with a non-ASCII name came back from `ls-files` spelled in a different
+encoding than the walk produced, and a node set defined as "what git listed" lost them
+without a word.
+
+The asymmetry that remains is in **reporting**, not in the sets: an untracked file can be
+reported as an orphan but never as a dead link. Reachability is this tool's own question,
+while the dead-link count is printed beside the linter's, and the linter reads relink,
+which scans what git tracks. Two numbers for one fact is the failure being avoided; one
+number that ignores a file nobody has committed is merely a narrower question.
 
 ## The orphan exemption
 
@@ -151,8 +163,9 @@ span is masked or a target resolved, and every unchanged file would otherwise ke
 its old answer — a graph quietly disagreeing with the check that shares its definition.
 The fingerprint turns that into a single full rebuild.
 
-`stats --line` never waits longer than the repository said it would. Finding no usable
-answer, it starts the build in a **detached** process and waits for it — but only up to
+`stats --line` never waits longer than the repository said it would, and never calls an
+old answer fresh. Finding no usable answer, it starts the build in a **detached** process
+and waits for it — but only up to
 `thresholds.build_seconds`. "No usable answer" is not merely "no cache file": a cache
 written by an older version, or by a different `relink.py`, is discarded on read, so it
 exists and is worth nothing — and treating that as warm would run the whole build
@@ -160,6 +173,12 @@ synchronously, straight past the budget that exists to prevent exactly that. Und
 line says the graph is not there yet and returns; the build carries on, and the next call
 answers from the cache. A session hook wired to this command therefore needs a timeout
 **above** that budget, or it gets killed before it can print either answer.
+
+Cold is not the same as empty. A cache thrown away for its version or its `relink.py`
+fingerprint leaves the previous `graph.json` standing, and those counts are worth
+printing — they are simply not fresh, and the rebuild just launched is the proof of it.
+They go out immediately, labelled `rebuilding`, and the next call reads the new ones.
+Nothing waits, and nothing claims a freshness it does not have.
 
 Only one build runs at a time. The right to start one is claimed by creating a lock file
 with `O_EXCL`, so the claim is atomic and a status line rendering every turn cannot
@@ -169,6 +188,15 @@ that was launched holding it, and only that build releases it: an ordinary `map`
 behind by a build that died — or by a spawn that never started — is reclaimed once it goes
 stale, and a failed spawn drops it immediately rather than leaving every later call to
 wait out the budget for nothing.
+
+The file carries a **token** naming the build that holds it, and a release that finds
+another token does nothing. Age alone cannot tell a dead build from a slow one, so a build
+that outruns the stale threshold has its lock reclaimed from under it; releasing blindly,
+it would then delete the lock of the build that replaced it and let a third start. The
+detached build gives the lock back on **every** way out of its process — an unreadable
+config or a `relink.py` that will not load owes it back exactly as much as a build that
+finished, and leaving it standing would make every status line until the stale timeout
+wait out the full budget for a build that was no longer running.
 
 `report` writes the same bytes twice over an unchanged tree: when it was built and how
 long that took live in `graph.json` and in `stats`, deliberately not in the report, so two

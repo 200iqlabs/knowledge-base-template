@@ -509,7 +509,8 @@ def _load_graph():
         return None
 
 
-def check_orphans(config: dict, scope_abs: str | None, findings: list[Finding]) -> None:
+def check_orphans(config: dict, config_path: str, scope_abs: str | None,
+                  findings: list[Finding]) -> None:
     """#20 a file no other file links to.
 
     A WARN, not an ERROR, and the difference is the damage. A dead link is an instruction
@@ -535,6 +536,12 @@ def check_orphans(config: dict, scope_abs: str | None, findings: list[Finding]) 
         findings.append(Finding("WARN", "orphan", config_rel,
                                 "graph config not readable — check #20 skipped"))
         return
+    # The graph borrows the scope roots and the exemption rule from a linter config,
+    # and it has to be the one THIS invocation was given. Its own config names a path,
+    # which is right when nobody passes --config and wrong the moment somebody does:
+    # check #20 would then answer from a different scan_roots and a different
+    # self_index_marker than every other check in the same run.
+    graph_config["lint_config"] = rel(os.path.abspath(config_path))
     # persist=False: the linter states facts about files and writes nothing, not even a
     # cache it would be entitled to write.
     state = graph.build(graph_config, REPO_ROOT, persist=False)
@@ -1049,7 +1056,7 @@ def run(config: dict, scope: str | None, today: _dt.date,
     # whole scope rather than per entity.
     check_dead_links(scope_abs, findings)
     # Same reason as #19: reachability is a property of the whole graph, not of an entity.
-    check_orphans(config, scope_abs, findings)
+    check_orphans(config, config_path, scope_abs, findings)
 
     EXTERNAL_RAN = run_external_checks(config, config_path, scope_abs, findings)
 
