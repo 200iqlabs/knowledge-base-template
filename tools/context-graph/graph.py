@@ -23,8 +23,11 @@ Usage:
     python <path-to>/graph.py stats [--line]
     python <path-to>/graph.py report
 
-Exit code: 0 always, except 2 on a usage error. The state of the knowledge base — orphans,
-dead links — is the content of the answer, never a failure of the run.
+Exit code: 0, except 2 on a usage error or a broken installation — a config that exists and
+will not parse, a `relink.py` that will not load. The state of the knowledge base — orphans,
+dead links — is the content of the answer and never a failure of the run; not being able to
+answer at all is, because the caller that silences stderr reads only the code, and 0 there
+leaves a stale graph standing without a word.
 """
 from __future__ import annotations
 
@@ -213,7 +216,11 @@ def load_config(path: str) -> dict | None:
     try:
         with open(path, "r", encoding="utf-8") as fh:
             config = yaml.safe_load(fh)
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        # `UnicodeError` alongside the other two: the file is opened as UTF-8, so a config
+        # saved in a legacy codepage raises `UnicodeDecodeError`, which is neither an
+        # `OSError` nor a YAML error. Uncaught it left a traceback where the documented
+        # answer is one line naming the config — and in a status line, on a render path.
         raise ConfigError(f"{path} could not be read ({exc.__class__.__name__})") from exc
     if not isinstance(config, dict):
         raise ConfigError(f"{path} does not hold a mapping of settings")
@@ -261,7 +268,15 @@ def resolve_rules(config: dict, root: str) -> dict:
 # --- the file set ------------------------------------------------------------
 
 def walk_markdown(root: str, roots: list[str]) -> list[str]:
-    """Every `.md` file under the given roots, as the working tree has it right now.
+    """Every visible `.md` file under the given roots, as the working tree has it now.
+
+    Visible means: nothing whose own name, or the name of a directory it sits in below a
+    root, starts with a dot. That is not a stray optimisation — this tool's own state
+    directory lives under a root by default, and a hidden directory under a knowledge
+    root is where tooling keeps its workings, not where the knowledge is. Excluding the
+    state directory by name instead would need the config down here and would still walk
+    every other hidden tree. A root may itself be hidden and is walked: it was named on
+    purpose, which is the difference.
 
     Deliberately not `git ls-files`: that reads the **index**, so staging a newly created
     file would change what the graph — and therefore the linter's orphan check — reports,
@@ -455,13 +470,17 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
     skill or a tool document pointing into the base makes its target reachable, and
     calling that target an orphan would simply be false.
 
-    Sealed material is scanned and carries no edges, which is one set doing two jobs
+    Material put down is scanned and carries no edges, which is one set doing two jobs
     rather than an inconsistency. A link inside an archived file still has to be *looked
     at*: that is the set the repair tool scans, and the two dead-link counts are printed
-    side by side. But it must not make its target reachable, because a directory nobody
-    reads by default is not a way anybody gets anywhere. Left as an edge it would quietly
+    side by side. But it must not make its target reachable, because a file nobody reads
+    by default is not a way anybody gets anywhere. Left as an edge it would quietly
     answer "something points here" for a file whose only mention is in last quarter's raw
     export — precisely the orphan the check exists to surface.
+
+    The line is `put_down`, not `sealed`: an archived task and an aged-out status row are
+    unread by exactly the same rule as a sealed directory, and drawing the line at sealed
+    alone let them go on making their targets reachable.
     """
     node_set = set(nodes)
     seen: dict[str, bool] = {}
@@ -479,7 +498,7 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
         record = files.get(rel)
         if not record:
             continue
-        reaches = not relink.sealed(rel)
+        reaches = not put_down(relink, rel)
         for line, target, path, readings in record["targets"]:
             hit = next((r for r in readings if exists(r)), None)
             if hit is None:
@@ -509,6 +528,20 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
     return {"out": out, "in": inbound, "dead": dead}
 
 
+def put_down(relink, rel: str) -> bool:
+    """Material that records what happened as it happened, and is not read by default.
+
+    Sealed directories and closed history — archived tasks, aged-out status rows — are one
+    category, not two: both are written once and then left, and the reading rules keep an
+    agent out of both. One predicate, because the two places that ask are asking the same
+    question. `resolve` asks it to decide whether a file's links are a way of reaching
+    anything, and `reportable` to decide whether a dead link in it is worth telling anybody
+    about. Splitting it is what let an archived task keep a `data/` file out of the orphan
+    list while the same file's only other mention was in a sealed export.
+    """
+    return relink.sealed(rel) or relink.unread_by_default(rel)
+
+
 def reportable(relink, rel: str, tracked: set) -> bool:
     """Whether a dead link in this file is worth telling anybody about.
 
@@ -523,8 +556,7 @@ def reportable(relink, rel: str, tracked: set) -> bool:
     session line and one in the linter. The node set still includes untracked files,
     because reachability is this tool's own question and does not have to match.
     """
-    return not (relink.sealed(rel) or relink.unread_by_default(rel)
-                or rel not in tracked)
+    return not (put_down(relink, rel) or rel not in tracked)
 
 
 def silenced_because(relink, rel: str, tracked: set) -> str | None:
@@ -538,7 +570,7 @@ def silenced_because(relink, rel: str, tracked: set) -> str | None:
     the first name would let a scratch file nobody has committed inflate a figure that
     reads as closed history.
     """
-    if relink.sealed(rel) or relink.unread_by_default(rel):
+    if put_down(relink, rel):
         return "put-down"
     if rel not in tracked:
         return "untracked"
@@ -705,9 +737,13 @@ def publish(state_dir: str, started: float, payload: dict) -> None:
     too. It is short-lived by construction, one JSON write over a payload already in
     memory, which is why waiting for it is bounded in seconds rather than in builds.
 
-    Failing to claim it does not cost the answer: the numbers are already computed, and
-    writing them under the bare comparison is what every publish did before — never
-    worse, just not ordered.
+    Failing to claim it means giving the publish up, not doing it unclaimed. The answer
+    is unaffected either way — the numbers are already computed and already on their way
+    to whoever asked; only the file is skipped. And the claim can only be unavailable
+    because somebody else is mid-publish, so the file does get written, by them. Writing
+    it here anyway would run the read-and-write pair with nothing ordering it against
+    theirs, which is the stale overwrite this claim exists to prevent, reintroduced in
+    the one case it was taken out for.
 
     The hash cache needs no such guard. It is keyed by content, so an entry written by
     either build is valid for exactly the file it came from; the worst an overwrite costs
@@ -719,14 +755,15 @@ def publish(state_dir: str, started: float, payload: dict) -> None:
     while token is None and time.time() < deadline:
         time.sleep(0.05)
         token = take_lock(state_dir, PUBLISH_STALE, PUBLISH_LOCK_NAME)
+    if token is None:
+        return               # somebody else holds it and is writing; theirs stands
     try:
         previous = read_graph(path)
         if previous is not None and previous.get("started_at", 0) > started:
             return
         write_json(path, payload, sort_keys=True, indent=1)
     finally:
-        if token is not None:
-            drop_lock(state_dir, token, PUBLISH_LOCK_NAME)
+        drop_lock(state_dir, token, PUBLISH_LOCK_NAME)
 
 
 # --- assembling the answer ---------------------------------------------------
@@ -752,8 +789,8 @@ def build(config: dict, root: str, rebuild: bool = False,
     # Everything whose links are read at all. The nodes are folded in because git's
     # spelling of a path and the walk's are not always the same byte for byte — measured
     # on a directory with a non-ASCII name — and a node missing here would take its own
-    # links with it. Sealed material is in this set and carries no edges: `resolve` draws
-    # that line, because the two questions want different answers from the same scan.
+    # links with it. Material put down is in this set and carries no edges: `resolve`
+    # draws that line, because the two questions want different answers from one scan.
     sources = sorted(set(nodes) | set(list_sources(relink, visible, built)))
     state = refresh(relink, root, sources, state_dir, rebuild, persist)
     graph = resolve(relink, root, nodes, sources, state["files"], tracked)
@@ -783,7 +820,11 @@ def build(config: dict, root: str, rebuild: bool = False,
         "version": CACHE_VERSION,
         "config": config_fingerprint(config, root, config_path),
         "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "started_at": round(started, 3),
+        # Unrounded, unlike `seconds` below: this one is compared, not read. Rounded to
+        # milliseconds it stopped being a total order — two builds a fraction of a
+        # millisecond apart could land on the same stamp, and the older one would then
+        # pass the yield test it had just failed and write over the newer result.
+        "started_at": started,
         "seconds": round(elapsed, 3),
         "counts": {"nodes": len(nodes), "sources": len(sources), "edges": edges,
                    "orphans": len(reported), "waived": waived,
@@ -965,7 +1006,12 @@ def cmd_report(state: dict, limit: int) -> int:
         f"| link sources outside those scopes | {outside} |",
         f"| edges (.md -> .md links) | {state['edges']} |",
         f"| dead links (files read by default) | {len(state['dead'])} |",
-        f"| dead links in material put down | {len(state['dead_all']) - len(state['dead'])} |",
+        # The two silenced counts are named apart here for the same reason `stats` names
+        # them apart: subtracting the reported ones from the total lumps a dead link in a
+        # file nobody has committed yet together with closed history, and reads it out
+        # under the label that says there is nothing to repair.
+        f"| dead links in material put down | {state['dead_put_down']} |",
+        f"| dead links in files git does not track yet | {state['dead_untracked']} |",
         f"| orphans | {len(state['orphans'])} |",
         f"| exempt by the self-indexing subtree rule | {state['waived']} |",
         "",
@@ -1004,11 +1050,16 @@ def start_background_build(config_path: str, root: str, state_dir: str,
                            token: str) -> None:
     """Build the graph in a process nobody waits for.
 
-    The child is handed the parent's token and releases the lock on every way out of
-    its own process, not only on the way out through a build that worked: ownership
-    travels with the build, and a build that cannot even read the config still owes the
-    lock back. If the spawn fails the lock is dropped here and now — otherwise every
-    later call would wait out the full budget while nothing at all was building.
+    The child is handed the parent's token **and the directory that token was taken in**,
+    and releases the lock on every way out of its own process, not only on the way out
+    through a build that worked: ownership travels with the build, and a build that cannot
+    even read the config still owes the lock back. The directory has to travel with it for
+    exactly those ways out — the config is where `state_dir` is written, so on the path
+    where the config is what could not be read, the child has nothing left to derive it
+    from and used to fall back to the default. In a repository that configures a different
+    one that released nothing, and left the real claim standing until it went stale.
+    If the spawn fails the lock is dropped here and now — otherwise every later call would
+    wait out the full budget while nothing at all was building.
     """
     # Absolute before it travels: the caller may have written a path relative to the
     # directory it was invoked from, and the child starts in the repository root. The
@@ -1024,11 +1075,27 @@ def start_background_build(config_path: str, root: str, state_dir: str,
     try:
         subprocess.Popen(
             [sys.executable, os.path.abspath(__file__), "report",
-             "--release-lock", token, "--config", config_path, "--root", root],
+             "--release-lock", token, "--lock-dir", os.path.abspath(state_dir),
+             "--config", config_path, "--root", root],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, cwd=root, **flags)
     except OSError:
         drop_lock(state_dir, token)
+
+
+def released_in(lock_dir: str | None, root_arg: str | None,
+                config: dict | None = None, root: str | None = None) -> str:
+    """Where a lock handed to this process is to be given back.
+
+    The directory the claim was taken in, when the spawn passed it — that is a fact about
+    a file that already exists, and it is right on every way out, including the two that
+    are ways out of reading the config. Only a process nobody handed one falls back to
+    working it out, and then a config that did load beats the default.
+    """
+    if lock_dir:
+        return lock_dir
+    base = root if root is not None else repo_root(root_arg)
+    return os.path.join(base, (config or {}).get("state_dir", DEFAULT_STATE_DIR))
 
 
 def state_file(config: dict, root: str, name: str) -> str:
@@ -1192,6 +1259,8 @@ def main(argv: list[str]) -> int:
                         help="recompute everything, ignoring the cache")
     common.add_argument("--release-lock", metavar="TOKEN", default=argparse.SUPPRESS,
                         help=argparse.SUPPRESS)   # internal: the token this build holds
+    common.add_argument("--lock-dir", metavar="DIR", default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)   # internal: where that token was taken
     common.add_argument("--limit", type=int, default=argparse.SUPPRESS,
                         help="how many rows a list prints (default 15)")
     parser = argparse.ArgumentParser(
@@ -1223,6 +1292,9 @@ def main(argv: list[str]) -> int:
     # lock standing until it went stale, with every status line in between waiting out
     # the full budget for a build that was no longer running.
     token = getattr(args, "release_lock", None)
+    # The directory the token was taken in, sent along with it. Not derived from the
+    # config here, because two of the three ways out are ways out of reading the config.
+    lock_dir = getattr(args, "lock_dir", None)
     try:
         config = load_config(config_path)
     except ConfigError as exc:
@@ -1232,15 +1304,11 @@ def main(argv: list[str]) -> int:
         # behind without a word.
         sys.stderr.write(f"context-graph: {exc}\n")
         if token:
-            drop_lock(os.path.join(repo_root(getattr(args, "root", None)),
-                                   DEFAULT_STATE_DIR), token)
+            drop_lock(released_in(lock_dir, getattr(args, "root", None)), token)
         return 2
     if config is None:
         if token:
-            # The one path with no config to read `state_dir` from, so the default is
-            # the best that can be done; a wrong guess unlinks nothing.
-            drop_lock(os.path.join(repo_root(getattr(args, "root", None)),
-                                   DEFAULT_STATE_DIR), token)
+            drop_lock(released_in(lock_dir, getattr(args, "root", None)), token)
         return 0            # no config: this repository has no graph, so say nothing
     root = repo_root(getattr(args, "root", None))
     try:
@@ -1255,7 +1323,12 @@ def main(argv: list[str]) -> int:
         state = build(config, root, rebuild=getattr(args, "rebuild", False),
                       config_path=config_path)
         if state is None:
-            return 0
+            # relink.py would not load, so there is no definition of a link to build
+            # against. Not the state of the knowledge base — a broken installation, and
+            # the same case as a config that will not parse: the pre-commit block reads
+            # the exit code and silences stderr, so 0 here left a stale graph behind
+            # without a word, which is precisely what the graph is meant to prevent.
+            return 2
         if args.command == "links":
             return cmd_links(state, args.file)
         if args.command == "orphans":
@@ -1271,7 +1344,11 @@ def main(argv: list[str]) -> int:
         return 2
     finally:
         if token:
-            drop_lock(os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR)),
+            # `lock_dir` first even here, where the config did load: it says where the
+            # claim was actually taken, while the config only says where a claim taken
+            # now would go. Those differ if the config was edited after the spawn, and
+            # then the lock that exists is the one this process does not release.
+            drop_lock(released_in(lock_dir, getattr(args, "root", None), config, root),
                       token)
 
 

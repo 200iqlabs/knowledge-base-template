@@ -147,13 +147,18 @@ class PublishTest(unittest.TestCase):
         self.assertFalse(os.path.exists(
             graph.lock_path(self.state, graph.PUBLISH_LOCK_NAME)))
 
-    def test_a_held_claim_does_not_lose_the_answer(self):
-        """Waiting is bounded: the numbers go out even if the claim never comes free."""
+    def test_a_held_claim_yields_rather_than_racing(self):
+        """Waiting is bounded, and what follows the wait is giving up, not going unclaimed.
+
+        The holder of the claim is a publish in flight, so the file gets written either
+        way; writing it here too would be the read-and-write pair running with nothing
+        ordering it against theirs — the stale overwrite the claim exists to prevent.
+        """
         graph.PUBLISH_WAIT, held = 0.1, graph.PUBLISH_WAIT
         token = graph.take_lock(self.state, 300, graph.PUBLISH_LOCK_NAME)
         try:
             graph.publish(self.state, 100.0, payload(100.0))
-            self.assertEqual(self.published()["started_at"], 100.0)
+            self.assertFalse(os.path.exists(self.path))
         finally:
             graph.PUBLISH_WAIT = held
             graph.drop_lock(self.state, token, graph.PUBLISH_LOCK_NAME)

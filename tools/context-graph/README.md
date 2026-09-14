@@ -32,10 +32,12 @@ python tools/context-graph/graph.py links context/projects/EXAMPLE/status.md --c
 them after it without thinking about it. `--rebuild` ignores the cache; `--limit N` sets
 how many rows a list prints.
 
-**Exit code is always 0** (except 2 for a usage error, or for a config that exists and
-cannot be used). Orphans and dead links are the content of the answer, never a failure of
-the run — a status line that goes red because the knowledge base has a loose end would be
-red permanently.
+**Exit code is 0** unless the tool could not answer at all: 2 for a usage error, for a
+config that exists and cannot be used, and for a `relink.py` that will not load — without
+it there is no definition of a link to build against, and the caller that silences stderr
+reads only the code. Orphans and dead links are the content of the answer, never a failure
+of the run — a status line that goes red because the knowledge base has a loose end would
+be red permanently.
 
 **No config at all is silence, and that is a different thing from a broken one.** A
 repository that never configured this tool gets empty output and 0: the status line is
@@ -66,6 +68,16 @@ headings are not separate nodes, because in a base of this size they were 12 lin
 Every edge carries a **type**, today always `link`. It is spelled out rather than assumed
 so that adding a second source of edges later — co-occurrence in a commit, say — is an
 addition instead of a rewrite of everything that reads the graph.
+
+**Material put down carries no edges.** A file under a sealed directory (`archive/`,
+`communication/`, `output/`, `inbox/`), an archived task and an aged-out `status_archive.md`
+are read for dead links — that is what the repair tool scans, and the two counts stand side
+by side — but their links do not make a target reachable. Nobody reads those files by
+default, so a mention there is not a way anybody gets anywhere; left as an edge it would
+answer "something points here" about a file last named in an export from a year ago, which
+is exactly the orphan worth surfacing. One rule for all of it: an archived task is unread
+by the same reading rule as a sealed directory, and drawing the line at sealed alone let
+archived tasks go on hiding their targets.
 
 ## Nodes and sources are two different sets
 
@@ -154,7 +166,7 @@ exclusion list means "exclude nothing", not "unset, use the fallback".
 
 ## Cost, and why nothing is committed
 
-Measured on a base of 8 212 nodes, 456 further link sources and 11 080 edges:
+Measured on a base of 8 212 nodes, 456 further link sources and 10 256 edges:
 
 | | Time |
 |---|---|
