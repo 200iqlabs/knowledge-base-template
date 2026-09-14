@@ -211,19 +211,27 @@ def walk_markdown(root: str, roots: list[str]) -> list[str]:
     return sorted(set(found))
 
 
-def list_files(relink, root: str, roots: list[str], tracked: set) -> list[str]:
-    """Markdown under `roots`, minus what git ignores and minus templates.
+def skipped(relink, rel: str, built: set) -> bool:
+    """Files neither tool treats as a document with links of its own.
 
-    The predicate is "git tracks it, or git is not told to ignore it" — a file git tracks
-    cannot be ignored, so only the remainder is worth asking about. That is not merely an
-    optimisation: asking about all 8 000 walked files costs over two seconds and answers
-    "none ignored" every time, on a command a status line runs every turn. The set of
-    tracked paths is used to skip the question, never to decide what is a node, so what
+    A template's links resolve only once it is copied to where it will live; build output
+    is rewritten from its source over any repair, so the source is what gets checked.
+    relink draws both lines already, and drawing them differently here is what would make
+    the two disagree.
+    """
+    return relink.is_template(rel) or rel in built
+
+
+def list_nodes(relink, root: str, roots: list[str], tracked: set,
+               built: set) -> list[str]:
+    """The knowledge files: Markdown under `roots`, as the working tree has it.
+
+    The predicate for ignoring is "git tracks it, or git is not told to ignore it" — a
+    tracked file cannot be ignored, so only the remainder is worth asking about. That is
+    not merely an optimisation: asking about all 8 000 walked files costs over two seconds
+    and answers "none ignored" every time, on a command a status line runs every turn. The
+    tracked set is used to skip the question, never to decide what is a node, so what
     happens to be staged still cannot change the answer.
-
-    A template's links resolve only once it is copied to where it will live, so relink
-    leaves it alone; counting it here would make every template a permanent orphan and
-    let its placeholder links pose as edges.
     """
     found = walk_markdown(root, roots)
     if not found:
@@ -231,7 +239,23 @@ def list_files(relink, root: str, roots: list[str], tracked: set) -> list[str]:
     unknown = {rel for rel in found if rel not in tracked}
     ignored = relink.ignored(root, unknown) if unknown else set()
     return [rel for rel in found
-            if rel not in ignored and not relink.is_template(rel)]
+            if rel not in ignored and not skipped(relink, rel, built)]
+
+
+def list_sources(relink, tracked: set, built: set) -> list[str]:
+    """Every file whose links relink would scan — the graph reads exactly the same set.
+
+    Not a configured list of directories. That was tried and it is the wrong shape: any
+    such list is a guess at where links live, and on a real base a carefully written one
+    still missed 189 files relink reads — generated analyses, editor configuration,
+    presentation sources. Every one of those is a place a dead link can hide from the
+    graph while the linter reports it, which is precisely the disagreement the shared
+    definition exists to rule out. Asking "what does relink scan" has no such gap by
+    construction.
+    """
+    return sorted(rel for rel in tracked
+                  if rel.endswith(".md") and not relink.sealed(rel)
+                  and not skipped(relink, rel, built))
 
 
 def file_hash(root: str, rel: str) -> str | None:
@@ -309,7 +333,7 @@ def refresh(relink, root: str, sources: list[str], state_dir: str, rebuild: bool
 # --- resolution --------------------------------------------------------------
 
 def resolve(relink, root: str, nodes: list[str], sources: list[str],
-            files: dict) -> dict:
+            files: dict, tracked: set) -> dict:
     """Turn cached targets into edges and dead links against the tree as it is now.
 
     Sources and nodes are two different sets on purpose. A node is a knowledge file — the
@@ -348,13 +372,12 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
     asked = {r + ("/" if c[3].endswith("/") else "")
              for c in dead_candidates for r in c[4]}
     skip = {p.rstrip("/") for p in relink.ignored(root, asked)}
-    built = relink.generated(root, sources)
     dead = []
     for rel, line, target, _path, readings in dead_candidates:
         if any(r in skip for r in readings):
             continue
         dead.append({"path": rel, "line": line, "target": target,
-                     "reported": reportable(relink, rel, built)})
+                     "reported": reportable(relink, rel, tracked)})
     for edges in out.values():
         edges.sort()
     for edges in inbound.values():
@@ -363,17 +386,22 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
     return {"out": out, "in": inbound, "dead": dead}
 
 
-def reportable(relink, rel: str, built: set) -> bool:
+def reportable(relink, rel: str, tracked: set) -> bool:
     """Whether a dead link in this file is worth telling anybody about.
 
     Material that records what happened as it happened — sealed directories, archived
     tasks, aged-out status rows — describes the state of the day it was put down, so a
-    link that has since died is an accurate record, not a fault. Build output is written
-    from a source, over any repair, so the source is what gets checked. relink draws
-    these lines already; this reuses them rather than redrawing them.
+    link that has since died is an accurate record, not a fault. relink draws that line
+    already; this reuses it rather than redrawing it.
+
+    Untracked files are excluded for a narrower reason: relink scans what git tracks, so
+    a dead link in a file nobody has committed is invisible to check #19. Reporting it
+    here would make the two counts differ — and they are shown side by side, one in the
+    session line and one in the linter. The node set still includes untracked files,
+    because reachability is this tool's own question and does not have to match.
     """
     return not (relink.sealed(rel) or relink.unread_by_default(rel)
-                or relink.is_template(rel) or rel in built)
+                or rel not in tracked)
 
 
 # --- entities and the orphan exemption ---------------------------------------
@@ -474,7 +502,7 @@ def drop_lock(state_dir: str) -> None:
 # --- assembling the answer ---------------------------------------------------
 
 def build(config: dict, root: str, rebuild: bool = False,
-          persist: bool = True) -> dict | None:
+          persist: bool = True, release_lock: bool = False) -> dict | None:
     relink = load_relink()
     if relink is None:
         sys.stderr.write(f"context-graph: relink.py could not be loaded ({RELINK_PATH})\n")
@@ -483,14 +511,15 @@ def build(config: dict, root: str, rebuild: bool = False,
     state_dir = os.path.join(root, config.get("state_dir", "context/.graph"))
     started = time.time()
     tracked = set(relink.tracked_files(root))
-    nodes = list_files(relink, root, config.get("scan_roots", []), tracked)
-    # Files whose links count as a way in, even when they are not knowledge themselves.
-    extra = [rel for rel in list_files(relink, root, config.get("source_roots") or [],
-                                       tracked)
-             if rel not in set(nodes)]
-    sources = sorted(set(nodes) | set(extra))
+    walked = walk_markdown(root, config.get("scan_roots", []))
+    # One question to git about build output, over everything either set can contain.
+    built = relink.generated(root, sorted(set(walked) | {r for r in tracked
+                                                        if r.endswith(".md")}))
+    nodes = list_nodes(relink, root, config.get("scan_roots", []), tracked, built)
+    # Anything whose links make a node reachable, without being knowledge itself.
+    sources = sorted(set(nodes) | set(list_sources(relink, tracked, built)))
     state = refresh(relink, root, sources, state_dir, rebuild, persist)
-    graph = resolve(relink, root, nodes, sources, state["files"])
+    graph = resolve(relink, root, nodes, sources, state["files"], tracked)
     elapsed = time.time() - started
     reported, waived = orphans(root, nodes, graph, rules)
     edges = sum(len(v) for v in graph["out"].values())
@@ -523,7 +552,11 @@ def build(config: dict, root: str, rebuild: bool = False,
         "dead": result["dead"],
         "orphan_paths": reported,
     }, sort_keys=True, indent=1)
-    drop_lock(state_dir)
+    # Only the build that was launched holding the lock releases it. A concurrent `map`
+    # or `orphans` builds without one, and dropping it here would free a lock belonging
+    # to a detached build still running — letting the next status line start a second.
+    if release_lock:
+        drop_lock(state_dir)
     return result
 
 
@@ -557,8 +590,29 @@ def cmd_orphans(state: dict) -> int:
     return 0
 
 
+def entity_labels(state: dict) -> dict:
+    """Entity root -> the shortest name that still identifies it.
+
+    The root is the identity, never the folder name: the configuration carries several
+    scopes at once, so two entities may share a name. Keyed by name, their edges would be
+    merged into one pair and — worse — an edge between them would be read as internal and
+    dropped. The name is kept as the label only while it is unique.
+    """
+    scopes = state["rules"]["entity_scopes"]
+    roots: dict[str, str] = {}
+    for rel in state["nodes"]:
+        found = entity_of(rel, scopes)
+        if found:
+            roots[found[1]] = found[0]
+    seen: dict[str, int] = {}
+    for name in roots.values():
+        seen[name] = seen.get(name, 0) + 1
+    return {root: (name if seen[name] == 1 else root) for root, name in roots.items()}
+
+
 def bridge_pairs(state: dict) -> list:
     scopes = state["rules"]["entity_scopes"]
+    labels = entity_labels(state)
     pairs: dict[tuple[str, str], int] = {}
     for src, edges in state["graph"]["out"].items():
         a = entity_of(src, scopes)
@@ -566,9 +620,9 @@ def bridge_pairs(state: dict) -> list:
             continue
         for dst, _line, _kind in edges:
             b = entity_of(dst, scopes)
-            if not b or b[0] == a[0]:
+            if not b or b[1] == a[1]:
                 continue
-            key = tuple(sorted((a[0], b[0])))
+            key = tuple(sorted((labels.get(a[1], a[1]), labels.get(b[1], b[1]))))
             pairs[key] = pairs.get(key, 0) + 1
     return sorted(pairs.items(), key=lambda kv: (-kv[1], kv[0]))
 
@@ -596,7 +650,7 @@ def cmd_map(state: dict, limit: int) -> int:
     linked = set()
     for (a, b), _ in bridge_pairs(state):
         linked.update((a, b))
-    entities = sorted({e[0] for rel in state["nodes"] if (e := entity_of(rel, scopes))})
+    entities = sorted(entity_labels(state).values())
     alone = [e for e in entities if e not in linked]
     print(f"\nentities with no outside link: {len(alone)} of {len(entities)}")
     for name in alone:
@@ -636,8 +690,10 @@ def cmd_report(state: dict, limit: int) -> int:
     lines = [
         "# Knowledge base link graph",
         "",
-        f"Built {time.strftime('%Y-%m-%d %H:%M')} in {state['seconds']:.2f}s. "
-        "Generated and strictly local — it is not committed.",
+        "Generated and strictly local — it is not committed. The content is a function of "
+        "the repository alone: two runs over an unchanged tree write the same bytes, so "
+        "two reports can be diffed against each other. When it was built, and how long "
+        "that took, are in `graph.json` and in `stats`, deliberately not here.",
         "",
         "| Measure | Value |",
         "|---|---|",
@@ -680,8 +736,14 @@ def cmd_report(state: dict, limit: int) -> int:
 
 # --- the cold path -----------------------------------------------------------
 
-def start_background_build(config_path: str, root: str) -> None:
-    """Build the graph in a process nobody waits for."""
+def start_background_build(config_path: str, root: str, state_dir: str) -> None:
+    """Build the graph in a process nobody waits for.
+
+    The child is told to release the lock, because the parent took it: ownership travels
+    with the build, not with whoever happens to finish a build next. If the spawn fails
+    the lock is dropped here and now — otherwise every later call would wait out the full
+    budget and report the graph missing while nothing at all was building.
+    """
     flags = {}
     if os.name == "nt":
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — no console, no signal inheritance
@@ -690,12 +752,12 @@ def start_background_build(config_path: str, root: str) -> None:
         flags["start_new_session"] = True
     try:
         subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "report",
+            [sys.executable, os.path.abspath(__file__), "report", "--release-lock",
              "--config", config_path, "--root", root],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, cwd=root, **flags)
     except OSError:
-        pass            # a status line that cannot spawn simply stays quiet next turn
+        drop_lock(state_dir)
 
 
 def state_file(config: dict, root: str, name: str) -> str:
@@ -703,7 +765,23 @@ def state_file(config: dict, root: str, name: str) -> str:
 
 
 def is_cold(config: dict, root: str) -> bool:
-    return not os.path.exists(state_file(config, root, "cache.json"))
+    """Whether answering would mean a full build rather than a cheap refresh.
+
+    Not merely "is there a cache file". A cache written by an older version, or by a
+    different `relink.py`, is discarded on read — so it exists and is worth nothing, and
+    the synchronous path would then do the whole build while a session hook waits on it,
+    straight past the budget that exists to stop exactly that. A missing `graph.json`
+    counts too: it is what the waiting call reads its numbers from.
+    """
+    if not os.path.exists(state_file(config, root, "graph.json")):
+        return True
+    try:
+        with open(state_file(config, root, "cache.json"), "r", encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (OSError, ValueError):
+        return True
+    return not (blob.get("version") == CACHE_VERSION
+                and blob.get("relink") == relink_fingerprint())
 
 
 def await_graph(path: str, budget: float) -> dict | None:
@@ -739,7 +817,7 @@ def cold_line(config: dict, root: str, config_path: str) -> None:
     state_dir = os.path.join(root, config.get("state_dir", "context/.graph"))
     budget = float((config.get("thresholds") or {}).get("build_seconds") or 0)
     if take_lock(state_dir, stale_after=max(budget * 3, 60)):
-        start_background_build(config_path, root)
+        start_background_build(config_path, root, state_dir)
     blob = await_graph(state_file(config, root, "graph.json"), budget)
     print(ABSENT_LINE if blob is None else line_from_counts(blob["counts"], "fresh"))
 
@@ -760,6 +838,8 @@ def main(argv: list[str]) -> int:
                         help="repository root (default: git rev-parse)")
     common.add_argument("--rebuild", action="store_true", default=argparse.SUPPRESS,
                         help="recompute everything, ignoring the cache")
+    common.add_argument("--release-lock", action="store_true", default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)   # internal: this build holds the lock
     common.add_argument("--limit", type=int, default=argparse.SUPPRESS,
                         help="how many rows a list prints (default 15)")
     parser = argparse.ArgumentParser(
@@ -794,7 +874,8 @@ def main(argv: list[str]) -> int:
             and not getattr(args, "rebuild", False) and is_cold(config, root)):
         cold_line(config, root, config_path)
         return 0
-    state = build(config, root, rebuild=getattr(args, "rebuild", False))
+    state = build(config, root, rebuild=getattr(args, "rebuild", False),
+                  release_lock=getattr(args, "release_lock", False))
     if state is None:
         return 0
     if args.command == "links":

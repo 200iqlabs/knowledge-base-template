@@ -11,10 +11,11 @@
 scan_roots:
   - context
 
-# Link sources that are NOT nodes: files whose links make a node reachable without being
-# knowledge themselves — rules, skills, tooling docs. Left empty by default, because a
-# fresh repository has nowhere to point from yet. A root may name a single .md file.
-source_roots: []
+# There is no list of link sources here on purpose: a file's links make a node reachable
+# whether or not the file is knowledge itself, so the source set is exactly what relink
+# scans — every tracked .md outside sealed material. A configured list of roots is a guess
+# at where links live, and any gap in it is a place a dead link hides from the graph while
+# the linter reports it.
 
 # Graph, hash cache and report. Expected to be ignored by git: the graph is fully
 # reproducible from the files that ARE in the repository, so history carries the cause

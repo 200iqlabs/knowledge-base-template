@@ -62,18 +62,31 @@ A **node** is a knowledge file: something the graph answers about, and something
 be reported as unreachable. Nodes come from `scan_roots`.
 
 A **source** is anything whose links count as a way of reaching a node, without being
-knowledge itself — a rules file, a skill, a tooling document. Sources come from
-`source_roots`, and a root there may name a single `.md` file rather than a directory. A
-file reachable only from a skill is reachable; calling it an orphan would simply be false.
+knowledge itself — a rules file, a skill, a tooling document. A file reachable only from a
+skill is reachable; calling it an orphan would simply be false.
 
-The file list is the **working tree**, not `git ls-files`. The index would make the answer
-depend on what happens to be staged: a newly created file would appear the moment it was
-staged, and a deletion not yet staged would keep a file in the list that is no longer on
-disk. The linter's contract is that its result does not depend on the staging area, and a
-walk is the only source of truth that honours both that and "the answer describes the
-working tree". Git is still asked which files it ignores — but only about files it does
-not already track, because a tracked file cannot be ignored, and asking about all of them
-costs seconds on a command that runs every turn.
+**Sources are not configured.** They are exactly what relink scans: every tracked `.md`
+outside sealed material, minus templates and build output. A configured list of roots was
+tried for one round and is the wrong shape — any such list is a guess at where links live,
+and on a real base a carefully written one still missed 189 files relink reads: generated
+analyses, editor configuration, presentation sources. Every gap in it is a place a dead
+link hides from the graph while the linter reports it, which is the disagreement the
+shared definition exists to rule out.
+
+Nodes are found differently, because they answer a different question. The node list is
+the **working tree** under `scan_roots`, not `git ls-files`: the index would make the
+answer depend on what happens to be staged — a new file appearing the moment it was
+staged, a deletion not yet staged keeping a file that is no longer on disk. The linter's
+contract is that its result does not depend on the staging area, and a walk is the only
+source of truth that honours both that and "the answer describes the working tree". Git is
+still asked which files it ignores, but only about files it does not already track: a
+tracked file cannot be ignored, and asking about all of them costs seconds on a command
+that runs every turn.
+
+The two sets differ, then, and only in one direction: a node may be untracked, a source
+never is. That is why an untracked file can be reported as an orphan but never as a dead
+link — reachability is this tool's own question, while the dead-link count is shown beside
+the linter's and has to be the same number.
 
 ## The orphan exemption
 
@@ -104,7 +117,6 @@ Passed at invocation; the copy next to the script is a neutral default.
 | Key | Meaning |
 |---|---|
 | `scan_roots` | where nodes are looked for |
-| `source_roots` | files whose links count as a way in, without being nodes |
 | `state_dir` | where the graph, hash cache and report are written |
 | `lint_config` | the linter config to borrow the scope and exemption rules from |
 | `self_index_marker`, `exclude_dirs`, `entity_scopes` | inline fallbacks, used only when `lint_config` cannot be read |
@@ -118,13 +130,13 @@ exclusion list means "exclude nothing", not "unset, use the fallback".
 
 ## Cost, and why nothing is committed
 
-Measured on a base of 8 219 nodes, 344 further link sources and 11 025 edges:
+Measured on a base of 8 212 nodes, 456 further link sources and 11 080 edges:
 
 | | Time |
 |---|---|
-| cold build (`--rebuild`) | **~5.8 s** |
-| warm call (nothing changed) | **~2.2 s** |
-| one file changed | ~2.2 s, one file re-extracted |
+| cold build (`--rebuild`) | **~8 s** |
+| warm call (nothing changed) | **~2.5 s** |
+| one file changed | ~2.5 s, one file re-extracted |
 | cold `stats --line` | the build, or `build_seconds` — whichever comes first |
 
 Recomputation is keyed on a **content hash**, not a modification time: a checkout can
@@ -139,17 +151,28 @@ span is masked or a target resolved, and every unchanged file would otherwise ke
 its old answer — a graph quietly disagreeing with the check that shares its definition.
 The fingerprint turns that into a single full rebuild.
 
-`stats --line` never waits longer than the repository said it would. Finding no cache, it
-starts the build in a **detached** process and waits for it — but only up to
-`thresholds.build_seconds`. Under that, the call answers with real numbers. Over it, the
+`stats --line` never waits longer than the repository said it would. Finding no usable
+answer, it starts the build in a **detached** process and waits for it — but only up to
+`thresholds.build_seconds`. "No usable answer" is not merely "no cache file": a cache
+written by an older version, or by a different `relink.py`, is discarded on read, so it
+exists and is worth nothing — and treating that as warm would run the whole build
+synchronously, straight past the budget that exists to prevent exactly that. Under that, the call answers with real numbers. Over it, the
 line says the graph is not there yet and returns; the build carries on, and the next call
 answers from the cache. A session hook wired to this command therefore needs a timeout
 **above** that budget, or it gets killed before it can print either answer.
 
 Only one build runs at a time. The right to start one is claimed by creating a lock file
 with `O_EXCL`, so the claim is atomic and a status line rendering every turn cannot
-stampede a cold repository with one full build per render. A lock left behind by a build
-that died is reclaimed once it goes stale. The cache and the graph are written to a
+stampede a cold repository with one full build per render. The lock belongs to the build
+that was launched holding it, and only that build releases it: an ordinary `map` or
+`orphans` builds without one and must not free a detached build still running. A lock left
+behind by a build that died — or by a spawn that never started — is reclaimed once it goes
+stale, and a failed spawn drops it immediately rather than leaving every later call to
+wait out the budget for nothing.
+
+`report` writes the same bytes twice over an unchanged tree: when it was built and how
+long that took live in `graph.json` and in `stats`, deliberately not in the report, so two
+reports can be diffed against each other. The cache and the graph are written to a
 temporary file and renamed over the target, because the waiting call is reading a file
 another process is writing: a rename is atomic, and a half-written cache read as complete
 would be a wrong answer that sticks.
