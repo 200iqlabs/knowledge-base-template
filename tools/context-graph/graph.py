@@ -85,6 +85,15 @@ CACHE_VERSION = 2
 # everything that reads the graph.
 EDGE_LINK = "link"
 LOCK_NAME = "building.lock"
+# Publishing is a second, much shorter claim, and a separate one on purpose: a build that
+# takes no build lock (an ordinary `map`, or the linter) still has to publish safely.
+PUBLISH_LOCK_NAME = "publishing.lock"
+# How long a publish waits for the one in front of it, and how long a held publish claim
+# may stand before it is assumed dead. A publish is one JSON write over a file already in
+# memory, so seconds are generous; the wait is bounded because the numbers still go out
+# either way.
+PUBLISH_WAIT = 2.0
+PUBLISH_STALE = 30.0
 # Where state goes when a config does not say. Needed on one path where the config is
 # exactly what could not be read — the detached build still owes its lock back.
 DEFAULT_STATE_DIR = "context/.graph"
@@ -152,6 +161,38 @@ def relink_fingerprint() -> str:
             return hashlib.sha256(fh.read()).hexdigest()[:16]
     except OSError:
         return "unknown"
+
+
+def config_fingerprint(config: dict, root: str, config_path: str | None) -> str:
+    """A hash of the files that decide what the published counts mean.
+
+    The cache is keyed by the content of each knowledge file, which answers "did this
+    file change" and nothing else. Which files are looked at in the first place, where an
+    entity begins, what exempts a subtree from being called an orphan — all of that comes
+    from the config, and from the linter's config behind it. Change either and every
+    number in the published graph can move without one knowledge file having changed, so
+    a state written before the edit would keep being served as current.
+
+    The bytes of the two files are hashed rather than the settings parsed out of them:
+    this is read on the render path, where a YAML parse per draw is a cost nobody agreed
+    to, and where the parse would also have to report a config it could not read. Hashing
+    bytes is stricter than it needs to be — a reworded comment invalidates too — and that
+    errs the right way: the line still prints instantly, it just rebuilds behind itself.
+    """
+    digest = hashlib.sha256()
+    lint_config = config.get("lint_config")
+    for path in (config_path,
+                 os.path.join(root, lint_config) if lint_config else None):
+        if path is None:
+            digest.update(b"\0none")
+            continue
+        try:
+            with open(path, "rb") as fh:
+                digest.update(fh.read())
+        except OSError:
+            digest.update(b"\0unreadable")
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
 
 
 def load_config(path: str) -> dict | None:
@@ -413,6 +454,14 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
     a way of reaching one, which includes files that are not knowledge themselves: a
     skill or a tool document pointing into the base makes its target reachable, and
     calling that target an orphan would simply be false.
+
+    Sealed material is scanned and carries no edges, which is one set doing two jobs
+    rather than an inconsistency. A link inside an archived file still has to be *looked
+    at*: that is the set the repair tool scans, and the two dead-link counts are printed
+    side by side. But it must not make its target reachable, because a directory nobody
+    reads by default is not a way anybody gets anywhere. Left as an edge it would quietly
+    answer "something points here" for a file whose only mention is in last quarter's raw
+    export — precisely the orphan the check exists to surface.
     """
     node_set = set(nodes)
     seen: dict[str, bool] = {}
@@ -430,12 +479,13 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
         record = files.get(rel)
         if not record:
             continue
+        reaches = not relink.sealed(rel)
         for line, target, path, readings in record["targets"]:
             hit = next((r for r in readings if exists(r)), None)
             if hit is None:
                 dead_candidates.append((rel, line, target, path, readings))
                 continue
-            if hit.endswith(".md") and hit in node_set and hit != rel:
+            if reaches and hit.endswith(".md") and hit in node_set and hit != rel:
                 out.setdefault(rel, []).append((hit, line, EDGE_LINK))
                 inbound.setdefault(hit, []).append((rel, line, EDGE_LINK))
     # A target git is told to ignore exists on the station that produced it and nowhere
@@ -449,7 +499,8 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
         if any(r in skip for r in readings):
             continue
         dead.append({"path": rel, "line": line, "target": target,
-                     "reported": reportable(relink, rel, tracked)})
+                     "reported": reportable(relink, rel, tracked),
+                     "cause": silenced_because(relink, rel, tracked)})
     for edges in out.values():
         edges.sort()
     for edges in inbound.values():
@@ -474,6 +525,24 @@ def reportable(relink, rel: str, tracked: set) -> bool:
     """
     return not (relink.sealed(rel) or relink.unread_by_default(rel)
                 or rel not in tracked)
+
+
+def silenced_because(relink, rel: str, tracked: set) -> str | None:
+    """Which of `reportable`'s two reasons kept this dead link quiet, or None if neither.
+
+    The two are not interchangeable and must not be counted as one. "Material put down"
+    is a statement about the knowledge base — a record of the day it was written, and
+    nothing to repair. "Not tracked yet" is a statement about one file on one station:
+    the link may well be a fault, it is simply invisible to the check whose count this
+    one has to match, and it stops being invisible at `git add`. Reporting the sum under
+    the first name would let a scratch file nobody has committed inflate a figure that
+    reads as closed history.
+    """
+    if relink.sealed(rel) or relink.unread_by_default(rel):
+        return "put-down"
+    if rel not in tracked:
+        return "untracked"
+    return None
 
 
 # --- entities and the orphan exemption ---------------------------------------
@@ -508,7 +577,10 @@ def exempt(root: str, rel: str, rules: dict) -> bool:
     marker = rules["self_index_marker"]
     directory = os.path.dirname(rel)
     while directory and directory != entity_root and directory.startswith(entity_root + "/"):
-        if os.path.exists(os.path.join(root, directory, marker)):
+        # `isfile`, not `exists`: the linter looks the marker up among a directory's file
+        # names, so a *directory* that happens to carry the marker's name would exempt a
+        # whole subtree here and nothing there — one rule, two answers.
+        if os.path.isfile(os.path.join(root, directory, marker)):
             return True
         directory = os.path.dirname(directory)
     return False
@@ -528,8 +600,8 @@ def orphans(root: str, nodes: list[str], graph: dict, rules: dict) -> tuple[list
 
 # --- one build at a time -----------------------------------------------------
 
-def lock_path(state_dir: str) -> str:
-    return os.path.join(state_dir, LOCK_NAME)
+def lock_path(state_dir: str, name: str = LOCK_NAME) -> str:
+    return os.path.join(state_dir, name)
 
 
 def new_token() -> str:
@@ -537,7 +609,7 @@ def new_token() -> str:
     return f"{os.getpid()}-{time.time_ns()}"
 
 
-def take_lock(state_dir: str, stale_after: float) -> str | None:
+def take_lock(state_dir: str, stale_after: float, name: str = LOCK_NAME) -> str | None:
     """Claim the right to build: the token of the claim, or None if somebody holds it.
 
     Without this a cold start is a stampede: the status line renders every turn, finds no
@@ -552,7 +624,7 @@ def take_lock(state_dir: str, stale_after: float) -> str | None:
     one that replaced it, and the next render would start a third against the same
     directory. A release that checks the token first does nothing at all in that case.
     """
-    path = lock_path(state_dir)
+    path = lock_path(state_dir, name)
     token = new_token()
     try:
         os.makedirs(state_dir, exist_ok=True)
@@ -571,12 +643,12 @@ def take_lock(state_dir: str, stale_after: float) -> str | None:
             os.unlink(path)
         except OSError:
             return None
-        return take_lock(state_dir, stale_after)
+        return take_lock(state_dir, stale_after, name)
     except OSError:
         return None
 
 
-def drop_lock(state_dir: str, token: str) -> None:
+def drop_lock(state_dir: str, token: str, name: str = LOCK_NAME) -> None:
     """Give the lock back, but only while it is still the one this build took.
 
     Reading the token and then unlinking are two operations, and a stale reclaim can land
@@ -588,7 +660,7 @@ def drop_lock(state_dir: str, token: str) -> None:
     which is what releasing means. Not ours: the claim goes back with `O_EXCL`, which
     cannot overwrite whoever holds the lock by then.
     """
-    path = lock_path(state_dir)
+    path = lock_path(state_dir, name)
     claimed = f"{path}.{token}"
     try:
         os.rename(path, claimed)
@@ -613,7 +685,7 @@ def drop_lock(state_dir: str, token: str) -> None:
         pass                 # a third build holds it now, which is claim enough
 
 
-def publish(path: str, started: float, payload: dict) -> None:
+def publish(state_dir: str, started: float, payload: dict) -> None:
     """Write the graph, unless a build that started later has already written its own.
 
     Builds are deliberately not serialised: an ordinary `orphans` or `map` runs while a
@@ -624,20 +696,43 @@ def publish(path: str, started: float, payload: dict) -> None:
     doing so until something rebuilt it. Every published graph carries the moment its
     build started, and a publish yields to one that started later.
 
+    Reading that stamp and writing over it are two operations, so the comparison alone
+    settles nothing: both builds can read the same older file, the newer one can write,
+    and the older one can then pass a test it has already invalidated and overwrite the
+    newer — precisely the outcome the stamp exists to prevent, only in a narrower window.
+    So the pair is taken under a claim of its own. It is not the build lock: a `map`, a
+    `report` and the linter all build without ever claiming that one, and they publish
+    too. It is short-lived by construction, one JSON write over a payload already in
+    memory, which is why waiting for it is bounded in seconds rather than in builds.
+
+    Failing to claim it does not cost the answer: the numbers are already computed, and
+    writing them under the bare comparison is what every publish did before — never
+    worse, just not ordered.
+
     The hash cache needs no such guard. It is keyed by content, so an entry written by
     either build is valid for exactly the file it came from; the worst an overwrite costs
     there is re-extracting a file whose entry went missing.
     """
-    previous = read_graph(path)
-    if previous is not None and previous.get("started_at", 0) > started:
-        return
-    write_json(path, payload, sort_keys=True, indent=1)
+    path = os.path.join(state_dir, "graph.json")
+    deadline = time.time() + PUBLISH_WAIT
+    token = take_lock(state_dir, PUBLISH_STALE, PUBLISH_LOCK_NAME)
+    while token is None and time.time() < deadline:
+        time.sleep(0.05)
+        token = take_lock(state_dir, PUBLISH_STALE, PUBLISH_LOCK_NAME)
+    try:
+        previous = read_graph(path)
+        if previous is not None and previous.get("started_at", 0) > started:
+            return
+        write_json(path, payload, sort_keys=True, indent=1)
+    finally:
+        if token is not None:
+            drop_lock(state_dir, token, PUBLISH_LOCK_NAME)
 
 
 # --- assembling the answer ---------------------------------------------------
 
 def build(config: dict, root: str, rebuild: bool = False,
-          persist: bool = True) -> dict | None:
+          persist: bool = True, config_path: str | None = None) -> dict | None:
     relink = load_relink()
     if relink is None:
         sys.stderr.write(f"context-graph: relink.py could not be loaded ({RELINK_PATH})\n")
@@ -654,7 +749,11 @@ def build(config: dict, root: str, rebuild: bool = False,
     built = relink.generated(root, sorted(set(walked) | {r for r in visible
                                                          if r.endswith(".md")}))
     nodes = list_nodes(relink, root, config.get("scan_roots", []), tracked, built)
-    # Anything whose links make a node reachable, without being knowledge itself.
+    # Everything whose links are read at all. The nodes are folded in because git's
+    # spelling of a path and the walk's are not always the same byte for byte — measured
+    # on a directory with a non-ASCII name — and a node missing here would take its own
+    # links with it. Sealed material is in this set and carries no edges: `resolve` draws
+    # that line, because the two questions want different answers from the same scan.
     sources = sorted(set(nodes) | set(list_sources(relink, visible, built)))
     state = refresh(relink, root, sources, state_dir, rebuild, persist)
     graph = resolve(relink, root, nodes, sources, state["files"], tracked)
@@ -674,12 +773,15 @@ def build(config: dict, root: str, rebuild: bool = False,
         "orphans": reported, "waived": waived,
         "edges": edges, "dead": [d for d in graph["dead"] if d["reported"]],
         "dead_all": graph["dead"], "seconds": elapsed,
+        "dead_put_down": sum(1 for d in graph["dead"] if d["cause"] == "put-down"),
+        "dead_untracked": sum(1 for d in graph["dead"] if d["cause"] == "untracked"),
         "recomputed": state["recomputed"],
     }
     if not persist:
         return result
-    publish(os.path.join(state_dir, "graph.json"), started, {
+    publish(state_dir, started, {
         "version": CACHE_VERSION,
+        "config": config_fingerprint(config, root, config_path),
         "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "started_at": round(started, 3),
         "seconds": round(elapsed, 3),
@@ -794,9 +896,33 @@ def cmd_map(state: dict, limit: int) -> int:
     return 0
 
 
-def line_from_counts(counts: dict, fresh: str) -> str:
+def line_from_counts(counts: dict, note: str) -> str:
     return (f"context: {counts['nodes']} nodes · {counts['edges']} edges · "
-            f"{counts['orphans']} orphans · {counts['dead']} dead links · {fresh}")
+            f"{counts['orphans']} orphans · {counts['dead']} dead links · {note}")
+
+
+def age_label(seconds: float) -> str:
+    """How long ago these counts were published — the one thing the line can prove.
+
+    `fresh` is a claim about the tree: it says the numbers were checked against the files
+    and match. Only a command that walked the files may make it, and the one-line form
+    deliberately walks nothing — it reads what the last build left behind. Labelling that
+    `fresh` was wrong in exactly the way that is hardest to notice: the line kept saying
+    the base was clean while a link added a minute ago was already dead, and looked no
+    different from the line that had checked.
+
+    An age says less and is always true. It also tells the reader the one thing they need
+    in order to know whether to trust it, which `fresh` never did. Coarse on purpose —
+    this is drawn beside a prompt, and a second of precision after the first minute is
+    width spent on nothing.
+    """
+    if seconds < 60:
+        return f"published {int(seconds)}s ago"
+    if seconds < 3600:
+        return f"published {int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"published {int(seconds // 3600)}h ago"
+    return f"published {int(seconds // 86400)}d ago"
 
 
 def stats_line(state: dict) -> str:
@@ -815,7 +941,9 @@ def cmd_stats(state: dict, one_line: bool) -> int:
           f"{len(state['sources']) - len(state['nodes'])}")
     print(f"  exempt by the self-indexing subtree rule: {state['waived']}")
     print(f"  dead links in material put down (not reported): "
-          f"{len(state['dead_all']) - len(state['dead'])}")
+          f"{state['dead_put_down']}")
+    print(f"  dead links in files git does not track yet (not reported): "
+          f"{state['dead_untracked']}")
     print(f"  build: {state['seconds']:.2f}s, files re-extracted: {state['recomputed']}")
     return 0
 
@@ -907,18 +1035,27 @@ def state_file(config: dict, root: str, name: str) -> str:
     return os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR), name)
 
 
-def is_cold(config: dict, root: str) -> bool:
+def is_cold(config: dict, root: str, config_path: str | None = None) -> bool:
     """Whether answering would mean a full build rather than a cheap refresh.
 
     Not merely "is there a cache file". A cache written by an older version, or by a
     different `relink.py`, is discarded on read — so it exists and is worth nothing, and
     the counts standing next to it describe a definition of a link that no longer holds.
-    The one-line form uses this to decide whether what it found on disk may be called
-    current at all: a graph published a moment ago over a cache since invalidated is
+    The one-line form uses this to decide whether what it found on disk is worth standing
+    behind at all: a graph published a moment ago over a cache since invalidated is
     recent and wrong, and recency alone would let it through. A missing `graph.json`
     counts too: it is what the waiting call reads its numbers from.
+
+    The config is the third way the same thing happens. Widen `scan_roots`, rename the
+    self-index marker, exclude one directory more in the linter's config, and every count
+    in the published graph can move while every knowledge file stands still — nothing in
+    a content-keyed cache would notice. So the fingerprint of the configuration is
+    compared as well, and a graph built under a different one is treated as cold.
     """
-    if not os.path.exists(state_file(config, root, "graph.json")):
+    published = read_graph(state_file(config, root, "graph.json"))
+    if published is None:
+        return True
+    if published.get("config") != config_fingerprint(config, root, config_path):
         return True
     try:
         with open(state_file(config, root, "cache.json"), "r", encoding="utf-8") as fh:
@@ -997,23 +1134,32 @@ def line_answer(config: dict, root: str, config_path: str) -> None:
     print at all: under it, a first call gets real numbers; over it, the line says the
     graph is not there yet. Either way nobody waits longer than the number in the config.
 
-    Cold does not always mean empty. A cache discarded for its version or its `relink.py`
-    fingerprint leaves the last build's `graph.json` behind, and those counts are worth
-    printing — they are simply not fresh, and printing them under the word `fresh` is the
-    one thing this line must never do, since a rebuild was just launched precisely
-    because they are out of date. They go out at once, labelled as being rebuilt, and
-    the next call reads the new ones.
+    Cold does not always mean empty. A cache discarded for its version, its `relink.py`
+    fingerprint or the configuration it was built under leaves the last build's
+    `graph.json` behind, and those counts are worth printing — they are simply known to
+    be out of date, which is why a rebuild was just launched. They go out at once,
+    labelled as being rebuilt, and the next call reads the new ones.
+
+    Nothing on this path is ever labelled `fresh`, including the branch inside the age
+    window. That word says the numbers were checked against the files, and this form
+    checks nothing by design: a link written seconds after a build is already missing
+    from counts that are seconds old. What the line can prove is when they were
+    published, so that is what it says — see `age_label`.
     """
     state_dir = os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR))
     thresholds = config.get("thresholds") or {}
     budget = float(thresholds.get("build_seconds") or 0)
-    max_age = float(thresholds.get("line_max_age_seconds") or DEFAULT_LINE_MAX_AGE)
+    # `is None`, not truthiness: `line_max_age_seconds: 0` is a repository saying "never
+    # serve a published build without starting a rebuild behind it", and reading that as
+    # "unset" would answer it with the default minute — the opposite instruction.
+    declared = thresholds.get("line_max_age_seconds")
+    max_age = float(DEFAULT_LINE_MAX_AGE if declared is None else declared)
     path = state_file(config, root, "graph.json")
     published = read_graph(path)          # read before the rebuild can replace it
     age = published_age(path)
     if (published is not None and age is not None and age <= max_age
-            and not is_cold(config, root)):
-        print(line_from_counts(published["counts"], "fresh"))
+            and not is_cold(config, root, config_path)):
+        print(line_from_counts(published["counts"], age_label(age)))
         return
     token = take_lock(state_dir, stale_after=max(budget * 3, 60))
     if token:
@@ -1022,7 +1168,10 @@ def line_answer(config: dict, root: str, config_path: str) -> None:
         print(line_from_counts(published["counts"], "rebuilding"))
         return
     blob = await_graph(path, budget, state_dir)
-    print(ABSENT_LINE if blob is None else line_from_counts(blob["counts"], "fresh"))
+    if blob is None:
+        print(ABSENT_LINE)
+        return
+    print(line_from_counts(blob["counts"], age_label(published_age(path) or 0.0)))
 
 
 # --- entry point -------------------------------------------------------------
@@ -1103,7 +1252,8 @@ def main(argv: list[str]) -> int:
                 and not getattr(args, "rebuild", False)):
             line_answer(config, root, config_path)
             return 0
-        state = build(config, root, rebuild=getattr(args, "rebuild", False))
+        state = build(config, root, rebuild=getattr(args, "rebuild", False),
+                      config_path=config_path)
         if state is None:
             return 0
         if args.command == "links":

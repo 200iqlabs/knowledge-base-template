@@ -2,7 +2,7 @@
 #
 # The script lives next to this file and is invoked with the consuming repository's own
 # config, the way context-lint is:
-#   python template/tools/context-graph/graph.py stats --config tools/context-graph/config.yaml
+#   python tools/context-graph/graph.py stats --config tools/context-graph/config.yaml
 # This copy is what the tool falls back to when no config is passed, so it has to work in
 # a repository that has only the template's skeleton — and it names no real project.
 

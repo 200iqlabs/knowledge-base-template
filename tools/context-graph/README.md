@@ -10,7 +10,9 @@ that wrote it, nothing reports it.
 
 ## Commands
 
-Every command refreshes before it answers, so there is no separate build step.
+Every command refreshes before it answers, so there is no separate build step — with one
+exception, `stats --line`, which is drawn on a timer and reads the last published build
+instead (see *Cost, and why nothing is committed*).
 
 | Command | Answers |
 |---|---|
@@ -22,8 +24,8 @@ Every command refreshes before it answers, so there is no separate build step.
 | `report` | writes the Markdown report into the state directory |
 
 ```bash
-python template/tools/context-graph/graph.py map --config tools/context-graph/config.yaml
-python template/tools/context-graph/graph.py links context/projects/EXAMPLE/status.md --config tools/context-graph/config.yaml
+python tools/context-graph/graph.py map --config tools/context-graph/config.yaml
+python tools/context-graph/graph.py links context/projects/EXAMPLE/status.md --config tools/context-graph/config.yaml
 ```
 
 `--config` and `--root` work on either side of the command name, because a hook writes
@@ -186,9 +188,21 @@ timer.
 published counts are the answer and nothing is started. Outside it the counts still go out
 at once, labelled `rebuilding`, and the build runs for whoever asks next. The line is
 therefore never older than one window plus one build, and never costs more than a file
-read. Recency alone is not enough to call it `fresh`: a graph published a moment ago over a
-cache since invalidated — by a version bump, or by a changed `relink.py` — is recent and
-wrong, so that case is labelled as rebuilt too.
+read.
+
+**The line never says `fresh`, not even inside the window.** That word is a claim about
+the tree — the numbers were checked against the files and match — and only a command that
+walked the files may make it. This one walks nothing by design, so it states the one thing
+it can prove: when the counts were published (`published 12s ago`, `published 3m ago`).
+The distinction is not pedantry. A link written just after a build is already dead in a
+base whose line reads seconds old, and under the old wording that line was indistinguishable
+from one that had actually checked. `stats` without `--line` still says `fresh`, because it
+refreshed first and earned it.
+
+Recency is not enough on its own either. A graph published a moment ago over a cache since
+invalidated — by a version bump, by a changed `relink.py`, or by an edited config, whose
+`scan_roots` and exemption rule move every count without touching one knowledge file — is
+recent and wrong, so those cases are labelled `rebuilding` regardless of age.
 
 `thresholds.build_seconds` is what is left: the budget for a call that finds **nothing**
 published. It starts the build detached and waits, up to that number. Under it, the call
@@ -200,9 +214,10 @@ disappears with nothing published — that is a build that failed, and sleeping 
 of the budget for it would turn one failure into a stall on every call until the lock went
 stale.
 
-Cold is not the same as empty. A cache thrown away for its version or its `relink.py`
-fingerprint leaves the previous `graph.json` standing, and those counts are worth
-printing — they are simply not fresh, and the rebuild just launched is the proof of it.
+Cold is not the same as empty. A cache thrown away for its version, its `relink.py`
+fingerprint or the configuration it was built under leaves the previous `graph.json`
+standing, and those counts are worth printing — they are simply known to be out of date,
+and the rebuild just launched is the proof of it.
 They go out immediately, labelled `rebuilding`, and the next call reads the new ones.
 Nothing waits, and nothing claims a freshness it does not have.
 
@@ -254,3 +269,15 @@ The consequence, accepted on purpose: a fresh checkout has no graph until someth
 one, and a base falling apart leaves no trace in `git diff`. What compensates is that the
 signal arrives where it matters — in the session line and in the linter's checks, at the
 moment somebody is about to act on it.
+
+## Tests
+
+```bash
+python -m unittest tools/context-graph/test_graph.py
+```
+
+They cover what a run against a real base cannot show you: what the status line is allowed
+to claim, who wins when two builds publish at once, and the two places where this tool and
+the linter must answer a shared question identically — the orphan exemption and the
+dead-link count. Those are the failures that look like successes. A wrong label reads
+exactly like a right one; a lost publish looks like a graph that is merely a little behind.

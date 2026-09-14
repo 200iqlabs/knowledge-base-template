@@ -499,13 +499,22 @@ def check_dead_links(scope_abs: str | None, findings: list[Finding]) -> None:
 
 
 def _load_graph():
+    """`graph.py` as a module, or None when it will not load — for any reason at all.
+
+    Deliberately not a list of the three exception types an import usually fails with.
+    Executing a module runs its top level, and what that raises is unbounded: a syntax
+    error, a `ValueError` from a constant computed at import, anything a future edit
+    introduces. Naming a few types means the rest travel up as a traceback that ends the
+    whole lint run — and check #20 exists to say out loud that it could not run, which it
+    cannot do from a process that has already died.
+    """
     try:
         spec = importlib.util.spec_from_file_location("context_lint_graph", GRAPH_PATH)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module
-    except (OSError, ImportError, AttributeError):
+    except Exception:
         return None
 
 
@@ -558,10 +567,20 @@ def check_orphans(config: dict, config_path: str, scope_abs: str | None,
     graph_config["lint_config"] = rel(os.path.abspath(config_path))
     # persist=False: the linter states facts about files and writes nothing, not even a
     # cache it would be entitled to write.
-    state = graph.build(graph_config, REPO_ROOT, persist=False)
+    # Any exception, for the same reason the loader catches any: a build that raises —
+    # a config shaped wrongly enough to survive parsing, a git call that fails, a file
+    # that vanishes mid-walk — must end as this check's own ERROR, not as a traceback
+    # that takes every other check down with it and prints no finding at all.
+    try:
+        state = graph.build(graph_config, REPO_ROOT, persist=False)
+    except Exception as exc:
+        state, failure = None, f"{exc.__class__.__name__}: {exc}"
+    else:
+        failure = "it returned nothing"
     if state is None:
         findings.append(Finding("ERROR", "orphan", config_rel,
-                                "graph could not be built — check #20 could not run"))
+                                f"graph could not be built ({failure}) — "
+                                "check #20 could not run"))
         return
     listed = cfg.get("orphan_findings_listed", ORPHAN_FINDINGS_LISTED)
     scope_rel = rel(scope_abs) if scope_abs else None
@@ -572,11 +591,14 @@ def check_orphans(config: dict, config_path: str, scope_abs: str | None,
                                 "no file links here — name it in an index, or let the "
                                 "self-indexing subtree rule cover it"))
     if len(paths) > listed:
+        # Derived, never written out: inside the published template this file sits one
+        # directory level higher, so a literal `template/tools/...` names a path that
+        # does not exist there — and the hint is printed precisely to be pasted.
+        tool = rel(os.path.abspath(GRAPH_PATH))
         findings.append(Finding(
             "WARN", "orphan", config_rel,
             f"... and {len(paths) - listed} more file(s) nothing links to — "
-            f"`python template/tools/context-graph/graph.py orphans "
-            f"--config {config_rel}` lists them all"))
+            f"`python {tool} orphans --config {config_rel}` lists them all"))
 
 
 def check_comm_in_deliverables(entity: str, cfg: dict, findings: list[Finding]) -> None:

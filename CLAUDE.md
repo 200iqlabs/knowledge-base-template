@@ -434,9 +434,18 @@ expect it.
 **The graph is never committed, and rebuilds itself.** Its state directory is ignored,
 because the graph is fully reproducible from the files that *are* in the repository:
 history then carries the cause and not the effect, and there is no state file for parallel
-sessions to conflict over. Every command refreshes before it answers, keyed on content
-hashes, so there is no build step to remember and no stale answer to distrust — a fresh
-checkout simply has no graph until the first question is asked.
+sessions to conflict over. Every command in the table above refreshes before it answers,
+keyed on content hashes, so there is no build step to remember and no stale answer to
+distrust — a fresh checkout simply has no graph until the first question is asked.
+
+**The one-line form is the exception, and it says so itself.** A status line is drawn
+every turn, and a refresh walks the whole base whether anything changed or not, so
+`stats --line` answers from the **last published build** and names its age (`published 3m
+ago`) rather than claiming to match the tree; past the age threshold in the config it
+hands the rebuild to a background process and says `rebuilding`. Numbers beside the prompt
+can therefore trail a file saved a minute ago — that is the price of not paying a full
+walk per draw. Anything that has to be current is asked with a command from the table,
+`stats` without `--line` included.
 
 Scan scopes, the orphan exemption rule and the time budget are **not repeated here** —
 they live in the tool's config, which is passed at invocation, and the exemption rule is
