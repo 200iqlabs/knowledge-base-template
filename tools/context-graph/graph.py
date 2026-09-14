@@ -38,14 +38,33 @@ import sys
 import tempfile
 import time
 
-try:
-    import yaml
-except ImportError:
-    sys.stderr.write(
-        "context-graph: missing dependency PyYAML.\n"
-        "  Install with:  pip install pyyaml\n"
-    )
-    sys.exit(2)
+
+class ConfigError(Exception):
+    """A config that exists and cannot be used — a different thing from no config at all.
+
+    No config means this repository has no graph, and the answer to that is silence. A
+    config that will not parse means somebody configured one and it is broken, and
+    answering that with silence would report a healthy repository: the pre-commit block
+    would read exit 0, say nothing, and leave the graph stale without a word.
+    """
+
+
+def _yaml():
+    """PyYAML, imported only when something actually has to be parsed.
+
+    The status line is global — it runs in repositories that have never heard of this
+    tool, and there the contract is empty output and exit 0. A dependency check at import
+    time would print an installation hint in every one of them, which is exactly the
+    noise the empty-output contract exists to prevent. So the dependency is owed by a
+    repository that has a config to read, and by no other.
+    """
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ConfigError("missing dependency PyYAML — install with: "
+                          "pip install pyyaml") from exc
+    return yaml
+
 
 # Console encoding: a Windows console defaults to a legacy codepage. Replace rather than
 # raise — a mangled character is cosmetic, a traceback in a status line is not.
@@ -69,6 +88,10 @@ LOCK_NAME = "building.lock"
 # Where state goes when a config does not say. Needed on one path where the config is
 # exactly what could not be read — the detached build still owes its lock back.
 DEFAULT_STATE_DIR = "context/.graph"
+# How old a published graph may be before the one-line form starts a rebuild behind it.
+# Overridden by `thresholds.line_max_age_seconds`; a default is needed because the line
+# also runs against a config that predates the key.
+DEFAULT_LINE_MAX_AGE = 60
 ABSENT_LINE = "context: no graph yet — building in the background"
 
 
@@ -132,18 +155,28 @@ def relink_fingerprint() -> str:
 
 
 def load_config(path: str) -> dict | None:
-    """The config, or None when there is none.
+    """The config, or None when there is none. `ConfigError` when there is one and it is broken.
 
     None is not an error: this tool ships inside a template that lands in repositories
     which have not configured it, and a status line is global. No config means no graph
     means say nothing.
+
+    A file that exists and does not parse is the opposite case, and used to come back as
+    the same `None` — so a typo in the YAML read as "this repository has no graph", the
+    run ended 0, and the graph stayed as stale as it was, silently. Absence is answered
+    by the path not existing; anything else is reported.
     """
+    if not os.path.exists(path):
+        return None
+    yaml = _yaml()
     try:
         with open(path, "r", encoding="utf-8") as fh:
             config = yaml.safe_load(fh)
-    except (OSError, yaml.YAMLError):
-        return None
-    return config if isinstance(config, dict) else None
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigError(f"{path} could not be read ({exc.__class__.__name__})") from exc
+    if not isinstance(config, dict):
+        raise ConfigError(f"{path} does not hold a mapping of settings")
+    return config
 
 
 def resolve_rules(config: dict, root: str) -> dict:
@@ -162,7 +195,10 @@ def resolve_rules(config: dict, root: str) -> dict:
     lint_config = config.get("lint_config")
     if not lint_config:
         return rules
-    lint = load_config(os.path.join(root, lint_config))
+    try:
+        lint = load_config(os.path.join(root, lint_config))
+    except ConfigError:
+        lint = None
     if lint is None:
         sys.stderr.write(
             f"context-graph: lint_config not readable ({lint_config}) — "
@@ -541,19 +577,61 @@ def take_lock(state_dir: str, stale_after: float) -> str | None:
 
 
 def drop_lock(state_dir: str, token: str) -> None:
-    """Give the lock back, but only while it is still the one this build took."""
+    """Give the lock back, but only while it is still the one this build took.
+
+    Reading the token and then unlinking are two operations, and a stale reclaim can land
+    between them: the read says "mine", the reclaim replaces the file, and the unlink
+    then removes a lock belonging to the build that took over — leaving the way open for
+    a third. So the file is moved out of the way first, under a name carrying this
+    build's own token. A rename is atomic and exactly one caller can move any one file,
+    so from that point on nothing else can be removed by accident. Ours: it is gone,
+    which is what releasing means. Not ours: the claim goes back with `O_EXCL`, which
+    cannot overwrite whoever holds the lock by then.
+    """
+    path = lock_path(state_dir)
+    claimed = f"{path}.{token}"
     try:
-        with open(lock_path(state_dir), "r", encoding="ascii",
-                  errors="replace") as fh:
+        os.rename(path, claimed)
+    except OSError:
+        return               # no lock to give back, or somebody moved it first
+    try:
+        with open(claimed, "r", encoding="ascii", errors="replace") as fh:
             held = fh.read().strip()
     except OSError:
-        return               # no lock to give back
-    if held != token:
-        return               # reclaimed as stale and handed on: not ours to remove
+        held = token         # unreadable: treat as ours and let it go
     try:
-        os.unlink(lock_path(state_dir))
+        os.unlink(claimed)
     except OSError:
         pass
+    if held == token:
+        return
+    try:                     # reclaimed as stale and handed on while we were letting go
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, held.encode("ascii", errors="replace"))
+        os.close(fd)
+    except OSError:
+        pass                 # a third build holds it now, which is claim enough
+
+
+def publish(path: str, started: float, payload: dict) -> None:
+    """Write the graph, unless a build that started later has already written its own.
+
+    Builds are deliberately not serialised: an ordinary `orphans` or `map` runs while a
+    detached build is going, because making one wait for the other would trade three
+    duplicated seconds for a stalled command. What must not follow from that is the
+    slower of the two finishing last and laying its older view of the tree over the
+    newer one — the file would then describe a tree that no longer exists, and go on
+    doing so until something rebuilt it. Every published graph carries the moment its
+    build started, and a publish yields to one that started later.
+
+    The hash cache needs no such guard. It is keyed by content, so an entry written by
+    either build is valid for exactly the file it came from; the worst an overwrite costs
+    there is re-extracting a file whose entry went missing.
+    """
+    previous = read_graph(path)
+    if previous is not None and previous.get("started_at", 0) > started:
+        return
+    write_json(path, payload, sort_keys=True, indent=1)
 
 
 # --- assembling the answer ---------------------------------------------------
@@ -600,9 +678,10 @@ def build(config: dict, root: str, rebuild: bool = False,
     }
     if not persist:
         return result
-    write_json(os.path.join(state_dir, "graph.json"), {
+    publish(os.path.join(state_dir, "graph.json"), started, {
         "version": CACHE_VERSION,
         "built": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "started_at": round(started, 3),
         "seconds": round(elapsed, 3),
         "counts": {"nodes": len(nodes), "sources": len(sources), "edges": edges,
                    "orphans": len(reported), "waived": waived,
@@ -611,7 +690,7 @@ def build(config: dict, root: str, rebuild: bool = False,
                 for k, v in sorted(graph["out"].items())},
         "dead": result["dead"],
         "orphan_paths": reported,
-    }, sort_keys=True, indent=1)
+    })
     return result
 
 
@@ -803,6 +882,11 @@ def start_background_build(config_path: str, root: str, state_dir: str,
     lock back. If the spawn fails the lock is dropped here and now — otherwise every
     later call would wait out the full budget while nothing at all was building.
     """
+    # Absolute before it travels: the caller may have written a path relative to the
+    # directory it was invoked from, and the child starts in the repository root. The
+    # same text would then name a file that is not there, and the build would end
+    # without a graph, having burned the lock for nothing.
+    config_path = os.path.abspath(config_path)
     flags = {}
     if os.name == "nt":
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — no console, no signal inheritance
@@ -828,8 +912,10 @@ def is_cold(config: dict, root: str) -> bool:
 
     Not merely "is there a cache file". A cache written by an older version, or by a
     different `relink.py`, is discarded on read — so it exists and is worth nothing, and
-    the synchronous path would then do the whole build while a session hook waits on it,
-    straight past the budget that exists to stop exactly that. A missing `graph.json`
+    the counts standing next to it describe a definition of a link that no longer holds.
+    The one-line form uses this to decide whether what it found on disk may be called
+    current at all: a graph published a moment ago over a cache since invalidated is
+    recent and wrong, and recency alone would let it through. A missing `graph.json`
     counts too: it is what the waiting call reads its numbers from.
     """
     if not os.path.exists(state_file(config, root, "graph.json")):
@@ -853,32 +939,63 @@ def read_graph(path: str) -> dict | None:
     return blob if blob.get("version") == CACHE_VERSION and "counts" in blob else None
 
 
-def await_graph(path: str, budget: float) -> dict | None:
+def await_graph(path: str, budget: float, state_dir: str) -> dict | None:
     """Wait for a detached build to publish its counts, up to the budget.
 
     Waiting on `graph.json` rather than on the cache is what keeps the first call from
     doing the work twice: the counts are already in that file, so there is nothing left
     to compute once it appears. Only ever called when there was nothing to read — an
     artefact already on disk is never waited for, and never called fresh.
+
+    There are two ways to stop early, and the second one matters as much as the first:
+    the counts appear, or the lock is gone. The build gives its lock back on every way
+    out of its process, so a lock that has vanished with nothing published says the build
+    is over and failed — a `relink.py` that would not load, a spawn that never started.
+    Sleeping out the rest of the budget for it would turn one failed build into a stall
+    on every call until the stale threshold. The file is read before the lock is checked,
+    because publishing happens before releasing: nothing can be missed that way round.
     """
     deadline = time.time() + budget
     while True:
         blob = read_graph(path)
         if blob is not None:
             return blob
+        if not os.path.exists(lock_path(state_dir)):
+            return None      # nobody is building any more, and nothing was published
         if time.time() >= deadline:
             return None
         time.sleep(0.2)
 
 
-def cold_line(config: dict, root: str, config_path: str) -> None:
-    """Print the one-line answer when answering otherwise means a full build.
+def published_age(path: str) -> float | None:
+    """How long ago the graph on disk was published, or None when there is none."""
+    try:
+        return max(0.0, time.time() - os.path.getmtime(path))
+    except OSError:
+        return None
 
-    The budget is what the repository declares it will tolerate on a first build, and it
-    is the whole answer to "build it or say it is missing": under it, the caller gets real
-    numbers on this very call; over it, the line says the graph is not there yet and the
-    build carries on for the next one. Either way nobody waits longer than the number in
-    the config.
+
+def line_answer(config: dict, root: str, config_path: str) -> None:
+    """Print the one-line answer — without ever building in the process that prints it.
+
+    This is the one form on a render path. A status line is drawn every turn, and the
+    refresh behind the other commands walks and hashes the whole base whether or not
+    anything changed: measured at around three seconds on eight thousand files, which is
+    three seconds of every render, and unbounded besides — the budget used to apply only
+    when there was no cache at all, so exactly the case the documentation promised was
+    covered was the one that was not. So the one-line form reads what the last build
+    published and hands any rebuilding to a detached process. Every other command still
+    refreshes before it answers, because none of them is drawn on a timer.
+
+    `line_max_age_seconds` is the whole of the trade. Inside that window the published
+    counts are the answer and nothing is started; outside it the counts still go out at
+    once, labelled as being rebuilt, and the build runs for whoever asks next. So the
+    line is never older than one window plus one build, and never costs more than a file
+    read.
+
+    The budget is what the repository declares it will tolerate when there is nothing to
+    print at all: under it, a first call gets real numbers; over it, the line says the
+    graph is not there yet. Either way nobody waits longer than the number in the config.
 
     Cold does not always mean empty. A cache discarded for its version or its `relink.py`
     fingerprint leaves the last build's `graph.json` behind, and those counts are worth
@@ -888,16 +1005,23 @@ def cold_line(config: dict, root: str, config_path: str) -> None:
     the next call reads the new ones.
     """
     state_dir = os.path.join(root, config.get("state_dir", DEFAULT_STATE_DIR))
-    budget = float((config.get("thresholds") or {}).get("build_seconds") or 0)
+    thresholds = config.get("thresholds") or {}
+    budget = float(thresholds.get("build_seconds") or 0)
+    max_age = float(thresholds.get("line_max_age_seconds") or DEFAULT_LINE_MAX_AGE)
     path = state_file(config, root, "graph.json")
     published = read_graph(path)          # read before the rebuild can replace it
+    age = published_age(path)
+    if (published is not None and age is not None and age <= max_age
+            and not is_cold(config, root)):
+        print(line_from_counts(published["counts"], "fresh"))
+        return
     token = take_lock(state_dir, stale_after=max(budget * 3, 60))
     if token:
         start_background_build(config_path, root, state_dir, token)
     if published is not None:
         print(line_from_counts(published["counts"], "rebuilding"))
         return
-    blob = await_graph(path, budget)
+    blob = await_graph(path, budget, state_dir)
     print(ABSENT_LINE if blob is None else line_from_counts(blob["counts"], "fresh"))
 
 
@@ -950,7 +1074,18 @@ def main(argv: list[str]) -> int:
     # lock standing until it went stale, with every status line in between waiting out
     # the full budget for a build that was no longer running.
     token = getattr(args, "release_lock", None)
-    config = load_config(config_path)
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        # A config that exists and is broken is not the same as no config, and must not
+        # be answered with the silence owed to a repository that never configured one:
+        # the pre-commit block reads the exit code, and 0 here would leave a stale graph
+        # behind without a word.
+        sys.stderr.write(f"context-graph: {exc}\n")
+        if token:
+            drop_lock(os.path.join(repo_root(getattr(args, "root", None)),
+                                   DEFAULT_STATE_DIR), token)
+        return 2
     if config is None:
         if token:
             # The one path with no config to read `state_dir` from, so the default is
@@ -960,11 +1095,13 @@ def main(argv: list[str]) -> int:
         return 0            # no config: this repository has no graph, so say nothing
     root = repo_root(getattr(args, "root", None))
     try:
-        # Checked before building, because the point is not to build now: only the
-        # one-line form is on a render path, so only it refuses to wait.
+        # Before building, because the point is not to build here at all: only the
+        # one-line form is on a render path, so only it refuses to wait — cold or warm,
+        # since a warm refresh costs the same walk over every file and used to run
+        # synchronously past the very budget that exists to stop it.
         if (args.command == "stats" and getattr(args, "line", False)
-                and not getattr(args, "rebuild", False) and is_cold(config, root)):
-            cold_line(config, root, config_path)
+                and not getattr(args, "rebuild", False)):
+            line_answer(config, root, config_path)
             return 0
         state = build(config, root, rebuild=getattr(args, "rebuild", False))
         if state is None:

@@ -6,8 +6,11 @@
 # This copy is what the tool falls back to when no config is passed, so it has to work in
 # a repository that has only the template's skeleton — and it names no real project.
 
-# Where Markdown files are looked for. Everything below these roots that git tracks and
-# that ends in .md becomes a node.
+# Where Markdown files are looked for. Everything below these roots that ends in .md and
+# is not ignored becomes a node — read from the working tree, not from what git has in its
+# index: staging a file must not change the answer, so a file created and not yet added is
+# a node like any other (it can be reported as an orphan, though never as a dead link,
+# which is counted against exactly what the repair tool sees).
 scan_roots:
   - context
 
@@ -51,3 +54,9 @@ thresholds:
   # session hook wired to this command needs a timeout ABOVE this number, or it is killed
   # before the command can print either answer.
   build_seconds: 30
+  # How old the published graph may be before `stats --line` starts a rebuild behind it.
+  # The line never builds in its own process — it is drawn every turn, and a refresh walks
+  # every file whether or not anything changed. Inside this window the published counts
+  # are the answer; outside it they still go out at once, labelled `rebuilding`, and the
+  # build runs for whoever asks next. Every other command refreshes before it answers.
+  line_max_age_seconds: 60

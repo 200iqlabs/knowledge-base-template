@@ -521,6 +521,13 @@ def check_orphans(config: dict, config_path: str, scope_abs: str | None,
     The exemption rule is not implemented here. It is whatever `context-graph orphans`
     applies, because the two numbers have to agree file for file — the moment they can
     differ, the question "how many orphans do we have" has two answers.
+
+    A check that cannot run is an ERROR, even though what it reports is a WARN. The two
+    levels answer different questions: an orphan is a fact about the knowledge base and a
+    mild one, while a missing `graph.py` or an unreadable graph config is a fact about
+    the verifier — and a verifier that quietly did not run, reported as a WARN, exits 0
+    and looks exactly like a base with nothing wrong in it. The one thing a linter may
+    never do is report health it did not measure.
     """
     cfg = config.get("link_graph") or {}
     config_rel = cfg.get("config")
@@ -528,13 +535,20 @@ def check_orphans(config: dict, config_path: str, scope_abs: str | None,
         return                      # not configured: this repo does not run the check
     graph = _load_graph()
     if graph is None:
-        findings.append(Finding("WARN", "orphan", rel(os.path.abspath(GRAPH_PATH)),
-                                "graph.py could not be loaded — check #20 skipped"))
+        findings.append(Finding("ERROR", "orphan", rel(os.path.abspath(GRAPH_PATH)),
+                                "graph.py could not be loaded — check #20 could not run"))
         return
-    graph_config = graph.load_config(os.path.join(REPO_ROOT, config_rel))
+    try:
+        graph_config = graph.load_config(os.path.join(REPO_ROOT, config_rel))
+    except Exception as exc:        # ConfigError, and whatever else the loader raises
+        graph_config = None
+        reason = f"{exc}"
+    else:
+        reason = "no such file"
     if graph_config is None:
-        findings.append(Finding("WARN", "orphan", config_rel,
-                                "graph config not readable — check #20 skipped"))
+        findings.append(Finding("ERROR", "orphan", config_rel,
+                                f"graph config not readable ({reason}) — "
+                                "check #20 could not run"))
         return
     # The graph borrows the scope roots and the exemption rule from a linter config,
     # and it has to be the one THIS invocation was given. Its own config names a path,
@@ -546,8 +560,8 @@ def check_orphans(config: dict, config_path: str, scope_abs: str | None,
     # cache it would be entitled to write.
     state = graph.build(graph_config, REPO_ROOT, persist=False)
     if state is None:
-        findings.append(Finding("WARN", "orphan", config_rel,
-                                "graph could not be built — check #20 skipped"))
+        findings.append(Finding("ERROR", "orphan", config_rel,
+                                "graph could not be built — check #20 could not run"))
         return
     listed = cfg.get("orphan_findings_listed", ORPHAN_FINDINGS_LISTED)
     scope_rel = rel(scope_abs) if scope_abs else None

@@ -98,6 +98,19 @@ deliverables_comm_exceptions: []
 task_registry:
   schema: tools/tasks/schema.yaml
 
+# check #20: the orphan check, which is the link graph's answer rather than a second
+# implementation of it. Wired here so a repository made from this template runs the check
+# from its first commit: the template ships the graph tool, check #19 already reports dead
+# links without being configured at all, and a check that silently does not run is the one
+# thing a linter must never look like. The path is where this file's own neighbour lands —
+# the template's contents ARE the root of the repository made from it.
+link_graph:
+  config: tools/context-graph/config.yaml
+  # How many orphans are listed one by one before the rest become a single count. About
+  # readability, not tolerance: every orphan is in the graph tool's own report, and the
+  # point here is that a long list does not bury the other checks.
+  orphan_findings_listed: 20
+
 # Checks belonging to the repository that consumes this template, run alongside the core
 # ones. Empty by default, and an empty list changes nothing about the output. Each entry:
 #   - label: short name, shown in the result as `<label>:<check>`

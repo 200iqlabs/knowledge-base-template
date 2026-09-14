@@ -30,9 +30,18 @@ python template/tools/context-graph/graph.py links context/projects/EXAMPLE/stat
 them after it without thinking about it. `--rebuild` ignores the cache; `--limit N` sets
 how many rows a list prints.
 
-**Exit code is always 0** (except 2 for a usage error). Orphans and dead links are the
-content of the answer, never a failure of the run — a status line that goes red because
-the knowledge base has a loose end would be red permanently.
+**Exit code is always 0** (except 2 for a usage error, or for a config that exists and
+cannot be used). Orphans and dead links are the content of the answer, never a failure of
+the run — a status line that goes red because the knowledge base has a loose end would be
+red permanently.
+
+**No config at all is silence, and that is a different thing from a broken one.** A
+repository that never configured this tool gets empty output and 0: the status line is
+global and runs in repositories that have never heard of the graph, and PyYAML is not even
+imported there, so a machine without it is not told to install anything it does not need.
+A config file that exists and will not parse is the opposite case — somebody configured
+one and it is broken — and is reported on stderr with exit 2. Answering that with silence
+would have the pre-commit block read success and leave a stale graph behind without a word.
 
 ## What counts as a link
 
@@ -133,6 +142,7 @@ Passed at invocation; the copy next to the script is a neutral default.
 | `lint_config` | the linter config to borrow the scope and exemption rules from |
 | `self_index_marker`, `exclude_dirs`, `entity_scopes` | inline fallbacks, used only when `lint_config` cannot be read |
 | `thresholds.build_seconds` | how long a first build may be waited for |
+| `thresholds.line_max_age_seconds` | how old the published graph may be before `stats --line` starts a rebuild behind it |
 
 The exemption rule and the scope boundaries are **borrowed from the linter's config** in a
 repository that runs one, rather than restated here — a second copy would drift the first
@@ -149,7 +159,8 @@ Measured on a base of 8 212 nodes, 456 further link sources and 11 080 edges:
 | cold build (`--rebuild`) | **~8 s** |
 | warm call (nothing changed) | **~2.5 s** |
 | one file changed | ~2.5 s, one file re-extracted |
-| cold `stats --line` | the build, or `build_seconds` — whichever comes first |
+| `stats --line` with a graph on disk | a file read |
+| `stats --line` with nothing published | the build, or `build_seconds` — whichever comes first |
 
 Recomputation is keyed on a **content hash**, not a modification time: a checkout can
 restore an mtime, and a graph that believes a stale cache reports links that no longer
@@ -163,16 +174,31 @@ span is masked or a target resolved, and every unchanged file would otherwise ke
 its old answer — a graph quietly disagreeing with the check that shares its definition.
 The fingerprint turns that into a single full rebuild.
 
-`stats --line` never waits longer than the repository said it would, and never calls an
-old answer fresh. Finding no usable answer, it starts the build in a **detached** process
-and waits for it — but only up to
-`thresholds.build_seconds`. "No usable answer" is not merely "no cache file": a cache
-written by an older version, or by a different `relink.py`, is discarded on read, so it
-exists and is worth nothing — and treating that as warm would run the whole build
-synchronously, straight past the budget that exists to prevent exactly that. Under that, the call answers with real numbers. Over it, the
-line says the graph is not there yet and returns; the build carries on, and the next call
-answers from the cache. A session hook wired to this command therefore needs a timeout
-**above** that budget, or it gets killed before it can print either answer.
+**`stats --line` never builds in the process that has to print it.** It is the one form on
+a render path — a status line is drawn every turn — and the refresh behind every other
+command walks and hashes the whole base whether or not anything changed: around three
+seconds on eight thousand files, which would be three seconds of every render. So the line
+reads what the last build published and hands any rebuilding to a **detached** process.
+Every other command still refreshes before it answers, because none of them is drawn on a
+timer.
+
+`thresholds.line_max_age_seconds` is the whole of the trade. Inside that window the
+published counts are the answer and nothing is started. Outside it the counts still go out
+at once, labelled `rebuilding`, and the build runs for whoever asks next. The line is
+therefore never older than one window plus one build, and never costs more than a file
+read. Recency alone is not enough to call it `fresh`: a graph published a moment ago over a
+cache since invalidated — by a version bump, or by a changed `relink.py` — is recent and
+wrong, so that case is labelled as rebuilt too.
+
+`thresholds.build_seconds` is what is left: the budget for a call that finds **nothing**
+published. It starts the build detached and waits, up to that number. Under it, the call
+answers with real numbers. Over it, the line says the graph is not there yet and returns;
+the build carries on, and the next call answers from what it published. A session hook
+wired to this command therefore needs a timeout **above** that budget, or it gets killed
+before it can print either answer. The wait also ends the moment the build's lock
+disappears with nothing published — that is a build that failed, and sleeping out the rest
+of the budget for it would turn one failure into a stall on every call until the lock went
+stale.
 
 Cold is not the same as empty. A cache thrown away for its version or its `relink.py`
 fingerprint leaves the previous `graph.json` standing, and those counts are worth
@@ -192,11 +218,24 @@ wait out the budget for nothing.
 The file carries a **token** naming the build that holds it, and a release that finds
 another token does nothing. Age alone cannot tell a dead build from a slow one, so a build
 that outruns the stale threshold has its lock reclaimed from under it; releasing blindly,
-it would then delete the lock of the build that replaced it and let a third start. The
+it would then delete the lock of the build that replaced it and let a third start.
+Checking the token and then unlinking would be two operations with that same reclaim able
+to land between them, so the release **renames the file out of the way first** — under a
+name carrying its own token, which exactly one caller can do — and reads it only then.
+Ours: gone, which is what releasing means. Not ours: put back with `O_EXCL`, which cannot
+overwrite whoever holds the lock by that point. The
 detached build gives the lock back on **every** way out of its process — an unreadable
 config or a `relink.py` that will not load owes it back exactly as much as a build that
 finished, and leaving it standing would make every status line until the stale timeout
 wait out the full budget for a build that was no longer running.
+
+Not being serialised, two builds can finish in either order, and the slower one must not
+lay its older view of the tree over the newer one — the file would then describe a tree
+that no longer exists, and go on doing so until something rebuilt it. So every published
+graph carries the moment its build **started**, and a publish yields to one that started
+later. The hash cache needs no such guard: keyed by content, an entry written by either
+build is valid for exactly the file it came from, and the worst an overwrite costs is
+re-extracting a file whose entry went missing.
 
 `report` writes the same bytes twice over an unchanged tree: when it was built and how
 long that took live in `graph.json` and in `stats`, deliberately not in the report, so two
