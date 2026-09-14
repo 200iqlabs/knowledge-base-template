@@ -582,11 +582,13 @@ def cmd_links(state: dict, target: str) -> int:
     return 0
 
 
-def cmd_orphans(state: dict) -> int:
+def cmd_orphans(state: dict, limit: int) -> int:
     reported = state["orphans"]
     print(f"orphans: {len(reported)}   exempt by rule: {state['waived']}")
-    for rel in reported:
+    for rel in reported[:limit]:
         print(f"  {rel}")
+    if len(reported) > limit:
+        print(f"  ... and {len(reported) - limit} more — raise --limit to see them all")
     return 0
 
 
@@ -881,7 +883,7 @@ def main(argv: list[str]) -> int:
     if args.command == "links":
         return cmd_links(state, args.file)
     if args.command == "orphans":
-        return cmd_orphans(state)
+        return cmd_orphans(state, limit)
     if args.command == "bridges":
         return cmd_bridges(state, limit)
     if args.command == "map":
