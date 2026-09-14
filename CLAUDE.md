@@ -409,6 +409,40 @@ into three files — **the proposal itself** in `deliverables/`, **the PDF** in 
    scanning `tasks/`. The cross-entity view is `context/tasks/_index.md` (see
    `Task Registry`). Both sections are generated — do not edit them by hand.
 
+
+## The link graph — what connects to this file
+
+Every index above answers **containment**: what is inside what. None answers **relation**:
+what points at this file, and what it points at. That second question is the one a
+cross-cutting task asks first, and until something reads the links back, an edge written
+in prose dies silently the first time a file moves — on the machine that wrote it, nothing
+reports it.
+
+`tools/context-graph/` reads them back. Reach for it when:
+
+| Question | Command |
+|---|---|
+| what depends on this file, before moving or rewriting it | `links <file>` |
+| what does nothing point at — what is written and unreachable | `orphans` |
+| which entities are actually entangled, and how much | `bridges` |
+| where the mass sits: hubs, sizes, entities with no outside link | `map` |
+
+Reach for it **before** a move, a rename or an archive pass, not after: the inbound list
+is the blast radius, and it is cheap to read while the file is still where the links
+expect it.
+
+**The graph is never committed, and rebuilds itself.** Its state directory is ignored,
+because the graph is fully reproducible from the files that *are* in the repository:
+history then carries the cause and not the effect, and there is no state file for parallel
+sessions to conflict over. Every command refreshes before it answers, keyed on content
+hashes, so there is no build step to remember and no stale answer to distrust — a fresh
+checkout simply has no graph until the first question is asked.
+
+Scan scopes, the orphan exemption rule and the time budget are **not repeated here** —
+they live in the tool's config, which is passed at invocation, and the exemption rule is
+borrowed from the linter's config rather than restated. Commands and rules:
+[`tools/context-graph/README.md`](tools/context-graph/README.md).
+
 ## Context Files & Data Storage Rules
 
 ### Rules
@@ -538,7 +572,7 @@ swept it away". Hundreds of ERRORs from a single directory are a signal about
    what should change in the skill. Verify, commit per scope, and fold that last part
    into the skill — the procedure improves with every run instead of with every mistake.
 
-The linter's check #19 keeps the count visible and still fixes nothing.
+The linter's check #19 reports what is left as an **ERROR** and still fixes nothing — the level followed the backlog being paid, not the other way round. Check #20 reports the opposite failure, a file nothing points at, as a WARN: a dead link misdirects, an orphan is merely unreachable.
 
 **`/close-session`** — `skills/close-session/`. Fixed order:
 **scope → extraction → tasks → the three files → lint → sweep → summary → one commit per

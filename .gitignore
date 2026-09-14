@@ -21,3 +21,9 @@ Thumbs.db
 
 # The task report is ephemeral by design: generated on demand, never committed.
 context/tasks/_today.md
+
+# context-graph's local state — graph, hash cache and report. Regenerable from the
+# files that ARE committed, so history carries the cause and not the effect; and a
+# committed state file would be a conflict factory in a repo worked on from several
+# sessions at once. Rebuilt by any query (see template/tools/context-graph/README.md).
+context/.graph/

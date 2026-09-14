@@ -420,6 +420,13 @@ def check_loopback_task_url(directory: str, tcfg: dict, findings: list[Finding])
 # sit in sibling directories of the template, not in a package.
 RELINK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
                            "tasks", "relink.py")
+# check #20 asks context-graph, for the same reason #19 asks relink: the exemption rule
+# has to be the one the `orphans` command applies, file for file, or the two answers
+# diverge and neither can be trusted. Loaded by path, same sibling arrangement.
+GRAPH_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir,
+                          "context-graph", "graph.py")
+# check #20: how many orphans are listed one by one before the rest become a count.
+ORPHAN_FINDINGS_LISTED = 20
 # check #19: per-file cap, for the same reason as ROW_LENGTH_FINDINGS_PER_FILE.
 DEAD_LINK_FINDINGS_PER_FILE = 5
 RELINK_REASONS = {
@@ -449,10 +456,16 @@ def check_dead_links(scope_abs: str | None, findings: list[Finding]) -> None:
     the repair already worked out, because `relink.py --apply` can prove it — the rest
     carry a lead and wait for a decision, since which file an author meant is judgement.
 
-    A WARN, not an ERROR: a dead link loses a pointer, not a fact, and the file that holds
-    it is still right. Closed history nobody reads by default (archived tasks, aged-out
-    status rows) reports only what the tool repairs on its own; a hand-made dead link
-    there would be noise on every run and cost nobody anything.
+    An ERROR in files read by default. It was a WARN while the repository still carried a
+    backlog of them, because an ERROR announced over an existing debt makes the linter
+    permanently red and hands /close-session scopes the session never touched — which is
+    the one property this linter exists to have. The backlog is paid, so the level now
+    matches the damage: a dead link is an instruction to open something that is not there.
+
+    Closed history nobody reads by default (archived tasks, aged-out status rows) is not
+    checked: a link in material put down describes the day it was put down, so repairing
+    it would falsify the record. What is still reported there — as a WARN — is the subset
+    relink repairs by itself, which changes no content.
     """
     relink = _load_relink()
     if relink is None:
@@ -462,7 +475,8 @@ def check_dead_links(scope_abs: str | None, findings: list[Finding]) -> None:
     tool = rel(os.path.abspath(RELINK_PATH))
     per_file: dict[str, int] = {}
     for link in relink.scan(REPO_ROOT, [rel(scope_abs)] if scope_abs else None):
-        if link.kind == "dead" and relink.unread_by_default(link.path):
+        unread = relink.unread_by_default(link.path)
+        if link.kind == "dead" and unread:
             continue
         count = per_file[link.path] = per_file.get(link.path, 0) + 1
         if count > DEAD_LINK_FINDINGS_PER_FILE:
@@ -472,13 +486,76 @@ def check_dead_links(scope_abs: str | None, findings: list[Finding]) -> None:
         else:
             message = (f"line {link.line}: `{link.target}` — {RELINK_REASONS[link.kind]}; "
                        f"`python {tool} --apply` repoints it to `{link.fix}`")
-        findings.append(Finding("WARN", "dead-link", link.path, message))
+        # Read by default -> ERROR. In closed history the only thing reported is what the
+        # tool repairs on its own, and a repair nobody has run yet is not a fault.
+        findings.append(Finding("WARN" if unread else "ERROR", "dead-link",
+                                link.path, message))
     for path, count in per_file.items():
         if count > DEAD_LINK_FINDINGS_PER_FILE:
             findings.append(Finding(
-                "WARN", "dead-link", path,
+                "WARN" if relink.unread_by_default(path) else "ERROR", "dead-link", path,
                 f"... and {count - DEAD_LINK_FINDINGS_PER_FILE} more dead link(s) "
                 f"in this file — `python {tool} {path}` lists them all"))
+
+
+def _load_graph():
+    try:
+        spec = importlib.util.spec_from_file_location("context_lint_graph", GRAPH_PATH)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    except (OSError, ImportError, AttributeError):
+        return None
+
+
+def check_orphans(config: dict, scope_abs: str | None, findings: list[Finding]) -> None:
+    """#20 a file no other file links to.
+
+    A WARN, not an ERROR, and the difference is the damage. A dead link is an instruction
+    to open something that is not there. An orphan is merely unreachable — often
+    legitimately, and often only for now: a file written this morning that its index will
+    name this afternoon is an orphan in between.
+
+    The exemption rule is not implemented here. It is whatever `context-graph orphans`
+    applies, because the two numbers have to agree file for file — the moment they can
+    differ, the question "how many orphans do we have" has two answers.
+    """
+    cfg = config.get("link_graph") or {}
+    config_rel = cfg.get("config")
+    if not config_rel:
+        return                      # not configured: this repo does not run the check
+    graph = _load_graph()
+    if graph is None:
+        findings.append(Finding("WARN", "orphan", rel(os.path.abspath(GRAPH_PATH)),
+                                "graph.py could not be loaded — check #20 skipped"))
+        return
+    graph_config = graph.load_config(os.path.join(REPO_ROOT, config_rel))
+    if graph_config is None:
+        findings.append(Finding("WARN", "orphan", config_rel,
+                                "graph config not readable — check #20 skipped"))
+        return
+    # persist=False: the linter states facts about files and writes nothing, not even a
+    # cache it would be entitled to write.
+    state = graph.build(graph_config, REPO_ROOT, persist=False)
+    if state is None:
+        findings.append(Finding("WARN", "orphan", config_rel,
+                                "graph could not be built — check #20 skipped"))
+        return
+    listed = cfg.get("orphan_findings_listed", ORPHAN_FINDINGS_LISTED)
+    scope_rel = rel(scope_abs) if scope_abs else None
+    paths = [p for p in state["orphans"]
+             if scope_rel is None or p == scope_rel or p.startswith(scope_rel + "/")]
+    for path in paths[:listed]:
+        findings.append(Finding("WARN", "orphan", path,
+                                "no file links here — name it in an index, or let the "
+                                "self-indexing subtree rule cover it"))
+    if len(paths) > listed:
+        findings.append(Finding(
+            "WARN", "orphan", config_rel,
+            f"... and {len(paths) - listed} more file(s) nothing links to — "
+            f"`python template/tools/context-graph/graph.py orphans "
+            f"--config {config_rel}` lists them all"))
 
 
 def check_comm_in_deliverables(entity: str, cfg: dict, findings: list[Finding]) -> None:
@@ -971,6 +1048,8 @@ def run(config: dict, scope: str | None, today: _dt.date,
     # A link crosses entities, scopes and the registry alike, so #19 runs once over the
     # whole scope rather than per entity.
     check_dead_links(scope_abs, findings)
+    # Same reason as #19: reachability is a property of the whole graph, not of an entity.
+    check_orphans(config, scope_abs, findings)
 
     EXTERNAL_RAN = run_external_checks(config, config_path, scope_abs, findings)
 
