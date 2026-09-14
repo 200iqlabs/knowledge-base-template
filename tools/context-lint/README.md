@@ -77,8 +77,14 @@ Two shapes, because a knowledge base usually has both:
   task files, #14 and #15 over the whole repository, #18 over the registry
   directory as well. Runs once
   per lint, not per entity.
-- **#19** and **#20** run once over every tracked `.md` file in the repository (or under `PATH`),
-  not per entity — a link crosses entities, scopes and the registry alike.
+- **#19** and **#20** run once over the whole repository (or under `PATH`), not per entity —
+  a link crosses entities, scopes and the registry alike. They read two different file sets,
+  and that difference is deliberate: **#19** asks about every **tracked** `.md`, because a
+  dead link it reports is one the repair tool can be pointed at, and that tool scans the
+  index; **#20** asks about the **working tree**, because staging must not change what a
+  check says about content that did not change — so a file created and not yet `git add`ed
+  is a node like any other and can be reported as an orphan, while a dead link inside it
+  cannot.
 
 A file-shaped entity has no `status.md` and no `catalog.md` by design — its state lives
 in a field inside the file — so the folder-shaped checks would only produce noise. What

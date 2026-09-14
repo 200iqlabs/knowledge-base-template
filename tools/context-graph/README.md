@@ -47,6 +47,36 @@ A config file that exists and will not parse is the opposite case — somebody c
 one and it is broken — and is reported on stderr with exit 2. Answering that with silence
 would have the pre-commit block read success and leave a stale graph behind without a word.
 
+## Wiring it in — both places, both optional
+
+Nothing below has to be installed for the tool to be correct. Every command refreshes
+before it answers, so a fresh clone is one question away from a current graph and stays
+that way with no hook at all. What these two add is *when* the work happens — and both are
+lines in files this template deliberately does not write for you: a hook is a decision
+about your own commits, and agent settings are a decision about your own environment.
+
+**A refresh per commit**, so the local report describes the tree being committed. Add it to
+the pre-commit hook after the other generators, guarded the same way they are — a warning
+and exit 0, never a blocked commit — and with **no path filter**: a link resolves against
+the whole tree, so a commit adding a data file revives the link that pointed at it, and a
+change to the ignore rules moves what counts as a link source at all. It stages nothing;
+the state directory is ignored.
+
+```bash
+python tools/context-graph/graph.py report --config tools/context-graph/config.yaml \
+  >/dev/null 2>&1 || echo "⚠ Pre-commit: the link graph may be stale" >&2
+```
+
+**The one-line form beside the prompt.** `stats --line` is written to be drawn on a timer:
+one sentence, no walk of the base, and **empty output in a repository that has no config**
+— which is what makes it safe to set globally. Wire it as your agent's status-line command,
+as a session-start hook, or both; it is the same call, and both read the same published
+build, so two places cannot show two numbers.
+
+```bash
+python tools/context-graph/graph.py stats --line --config tools/context-graph/config.yaml
+```
+
 ## What counts as a link
 
 **This tool does not decide that.** The definition of a link, and of where a link
@@ -130,7 +160,7 @@ indexes itself — a directory holding the `self_index_marker` file — and the 
 **stops at the entity root**. A scope-level index does not exempt anything: it lists
 entities, not their internals.
 
-That boundary is the whole rule. Measured three ways on a live base of 8 219 files:
+That boundary is the whole rule. Measured three ways on a live base of 8 212 files:
 
 | Where the index has to be | Exempts | Left to report |
 |---|---|---|

@@ -23,7 +23,10 @@ Thumbs.db
 context/tasks/_today.md
 
 # context-graph's local state — graph, hash cache and report. Regenerable from the
-# files that ARE committed, so history carries the cause and not the effect; and a
-# committed state file would be a conflict factory in a repo worked on from several
-# sessions at once. Rebuilt by any query (see tools/context-graph/README.md).
+# working tree, so history carries the cause and not the effect; and a committed state
+# file would be a conflict factory in a repo worked on from several sessions at once.
+# The working tree and not the index on purpose: a file written and not yet staged is
+# already a node, so what is regenerated can differ from what a commit would contain —
+# one more reason this belongs nowhere near history. Rebuilt by any query (see
+# tools/context-graph/README.md).
 context/.graph/

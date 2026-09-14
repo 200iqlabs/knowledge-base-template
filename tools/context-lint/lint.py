@@ -584,6 +584,12 @@ def check_orphans(config: dict, config_path: str, scope_abs: str | None,
         return
     listed = cfg.get("orphan_findings_listed", ORPHAN_FINDINGS_LISTED)
     scope_rel = rel(scope_abs) if scope_abs else None
+    # `lint.py .` is the whole repository, spelled as a path. `rel()` renders it `.`, and
+    # a prefix test against `.` matches nothing at all: the check then reported zero
+    # orphans and exited 0, which reads exactly like a clean base. relink — which #19 asks
+    # the same question — treats `""` and `"."` as no scope for this reason; so does this.
+    if scope_rel in ("", "."):
+        scope_rel = None
     paths = [p for p in state["orphans"]
              if scope_rel is None or p == scope_rel or p.startswith(scope_rel + "/")]
     for path in paths[:listed]:

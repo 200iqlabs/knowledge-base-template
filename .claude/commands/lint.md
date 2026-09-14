@@ -20,8 +20,9 @@ Run the context-lint consistency checker and report findings. Argument (optional
 
 2. Summarize the findings for the user, **ERROR-first**:
    - Lead with the count: `N ERROR, M WARN`.
-   - Group ERRORs by check (`catalog`, `index`, `structure`, `comm-place`, `task-header`, `task-window`, `manual-task`) and list the offending paths concisely. These block a clean close.
-   - Then WARNs by check (`freshness`, `inbox`, `extraction`, `naming`, `status-size`, `task-overdue`) — advisory.
+   - Group ERRORs by check (`catalog`, `index`, `structure`, `comm-place`, `task-header`, `task-window`, `manual-task`, `dead-link`) and list the offending paths concisely. These block a clean close.
+   - Then WARNs by check (`freshness`, `inbox`, `extraction`, `naming`, `status-size`, `task-overdue`, `orphan`) — advisory.
+   - `orphan` as an **ERROR** is not an orphan at all: it means the check could not run (no `graph.py`, an unreadable graph config, a build that returned nothing). Relay it as a broken tool, not as a finding about the knowledge base.
    - `manual-task` in bulk means a `status.md` still holds hand-written ⚪/🟡 rows that belong in `tasks/` — report it as one migration item per entity, not as N separate findings.
    - If the exit code is `2`, relay the dependency/config message verbatim (most likely missing PyYAML → `pip install pyyaml`).
    - **Hundreds of ERRORs from one directory is a config signal, not a repo signal** — say so instead of proposing to catalogue them one by one. The fix belongs in `config.yaml` (`catalog_exclude_dirs`, `self_index_marker`).

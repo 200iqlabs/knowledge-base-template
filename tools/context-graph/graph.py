@@ -139,13 +139,23 @@ def repo_root(explicit: str | None) -> str:
 
 
 def load_relink():
+    """relink.py as a module, or None when it will not load — for any reason at all.
+
+    Deliberately not the three exception types an import usually fails with. Executing a
+    module runs its top level, and what that raises is unbounded: a syntax error, a
+    `ValueError` from a constant computed at import, anything a future edit introduces.
+    Naming a few types means the rest leave as a traceback and exit 1 — while the caller
+    documents exit 2 for an installation that cannot be used, and the pre-commit block
+    reads that code. The linter's loader for this file already catches everything, for
+    the same reason.
+    """
     try:
         spec = importlib.util.spec_from_file_location("context_graph_relink", RELINK_PATH)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module          # dataclasses look themselves up here
         spec.loader.exec_module(module)
         return module
-    except (OSError, ImportError, AttributeError):
+    except Exception:
         return None
 
 
@@ -337,9 +347,14 @@ def untracked_markdown(root: str) -> set[str]:
     return {p for p in out.stdout.split("\0") if p}
 
 
-def list_nodes(relink, root: str, roots: list[str], tracked: set,
+def list_nodes(relink, root: str, found: list[str], tracked: set,
                built: set) -> list[str]:
-    """The knowledge files: Markdown under `roots`, as the working tree has it.
+    """The knowledge files, out of one walk of the scan roots already done.
+
+    The walk is passed in rather than repeated here: the caller needs the same list to
+    ask git about build output, and walking a base of this size costs about four tenths
+    of a second — spent twice per command, on a path the pre-commit hook and every lint
+    run go through.
 
     The predicate for ignoring is "git tracks it, or git is not told to ignore it" — a
     tracked file cannot be ignored, so only the remainder is worth asking about. That is
@@ -354,7 +369,6 @@ def list_nodes(relink, root: str, roots: list[str], tracked: set,
     defined as "what git listed" silently lost them. Existence is a fact about the disk;
     git is asked only the question the disk cannot answer, which is what it ignores.
     """
-    found = walk_markdown(root, roots)
     if not found:
         return []
     unknown = {rel for rel in found if rel not in tracked}
@@ -510,12 +524,21 @@ def resolve(relink, root: str, nodes: list[str], sources: list[str],
     # A target git is told to ignore exists on the station that produced it and nowhere
     # else, so its absence here does not make the link dead. relink asks git the same
     # question; asking it the same way is what keeps the two counts equal.
+    #
+    # "The same way" includes when it is asked at all: relink puts the question only about
+    # candidates it could not repair itself, and keeps a repairable link whatever git says
+    # about its target. Asking about every candidate dropped exactly the links relink
+    # reports with a fix attached — one question, two answers, which is the disagreement
+    # the shared definition exists to rule out.
+    fixable = {i for i, c in enumerate(dead_candidates)
+               if relink.repair(root, c[0], c[3])}
     asked = {r + ("/" if c[3].endswith("/") else "")
-             for c in dead_candidates for r in c[4]}
+             for i, c in enumerate(dead_candidates) if i not in fixable
+             for r in c[4]}
     skip = {p.rstrip("/") for p in relink.ignored(root, asked)}
     dead = []
-    for rel, line, target, _path, readings in dead_candidates:
-        if any(r in skip for r in readings):
+    for i, (rel, line, target, _path, readings) in enumerate(dead_candidates):
+        if i not in fixable and any(r in skip for r in readings):
             continue
         dead.append({"path": rel, "line": line, "target": target,
                      "reported": reportable(relink, rel, tracked),
@@ -785,7 +808,7 @@ def build(config: dict, root: str, rebuild: bool = False,
     # One question to git about build output, over everything either set can contain.
     built = relink.generated(root, sorted(set(walked) | {r for r in visible
                                                          if r.endswith(".md")}))
-    nodes = list_nodes(relink, root, config.get("scan_roots", []), tracked, built)
+    nodes = list_nodes(relink, root, walked, tracked, built)
     # Everything whose links are read at all. The nodes are folded in because git's
     # spelling of a path and the walk's are not always the same byte for byte — measured
     # on a directory with a non-ASCII name — and a node missing here would take its own
@@ -793,6 +816,12 @@ def build(config: dict, root: str, rebuild: bool = False,
     # draws that line, because the two questions want different answers from one scan.
     sources = sorted(set(nodes) | set(list_sources(relink, visible, built)))
     state = refresh(relink, root, sources, state_dir, rebuild, persist)
+    # What was actually read, not what git listed. `tracked_files` answers from the index,
+    # so a file deleted from the working tree and not yet staged is still in it; `refresh`
+    # skips it, having nothing to hash, and `resolve` has no record for it either. Counting
+    # it as a source anyway would have the one number describing the source set disagree
+    # with the tree the rest of the answer describes.
+    sources = sorted(state["files"])
     graph = resolve(relink, root, nodes, sources, state["files"], tracked)
     elapsed = time.time() - started
     reported, waived = orphans(root, nodes, graph, rules)
@@ -967,10 +996,19 @@ def age_label(seconds: float) -> str:
 
 
 def stats_line(state: dict) -> str:
-    fresh = "fresh" if state["recomputed"] == 0 else f"{state['recomputed']} recomputed"
+    """The headline of a form that walked the files before answering.
+
+    `fresh` unconditionally, because that is what this form is: it recomputed every file
+    whose content moved and only then spoke, which is precisely the claim the one-line
+    form may not make. It used to say `<n> recomputed` when the cache had been cold, and
+    that made two calls over an unchanged repository return different text for the same
+    state — the one thing the contract says a query may not do. How much work the build
+    did is not a fact about the knowledge base; it is on the `build:` line below, where
+    the seconds already are.
+    """
     return line_from_counts(
         {"nodes": len(state["nodes"]), "edges": state["edges"],
-         "orphans": len(state["orphans"]), "dead": len(state["dead"])}, fresh)
+         "orphans": len(state["orphans"]), "dead": len(state["dead"])}, "fresh")
 
 
 def cmd_stats(state: dict, one_line: bool) -> int:
