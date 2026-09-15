@@ -409,6 +409,22 @@ into three files — **the proposal itself** in `deliverables/`, **the PDF** in 
    scanning `tasks/`. The cross-entity view is `context/tasks/_index.md` (see
    `Task Registry`). Both sections are generated — do not edit them by hand.
 
+### An index lists what the scope contains, not what happened to it
+
+`_index.md` is an inventory. The history of the index's **own** changes lives in a
+sibling `_changelog.md`, which nothing reads by default — and a new entry goes straight
+there, never into the index.
+
+The boundary exists for the same reason a closed row in `status.md` has a length limit:
+**what a navigational file costs is what it costs to read**, and the index is read on
+every entry into the scope while its change history answers a question almost nobody is
+asking at that moment. An index that keeps its own log grows without bound and is paid
+for on every single read.
+
+This is not a hypothetical. The rule was once written as a sentence in an index's own
+header, and the log under it grew to 78 kB of an 83 kB file — 93 % of the most expensive
+file in the base — with nothing reporting it. A sentence in a header is not a guard, so
+the linter now holds this one (check #22).
 
 ## The link graph — what connects to this file
 

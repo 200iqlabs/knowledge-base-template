@@ -33,6 +33,19 @@ thresholds:
                                 # board: median 356, p75 933 — so 1000 lets three
                                 # quarters through and catches the ones that grew into a
                                 # paragraph. Tighten later once the outliers are gone.
+  catalog_row_max_chars: 1000   # check #21: how long a single entry in catalog.md may
+                                # get. Deliberately equal to status_row_max_chars above:
+                                # the two mean the same thing — an entry is a headline
+                                # saying what a file is and why to open it — and two
+                                # thresholds with one meaning and two values are two
+                                # thresholds somebody eventually confuses.
+
+# check #21: entities whose catalog.md is not checked for entry length, each with the
+# reason it is exempt. The reason is required, not decoration: an exception without one
+# is indistinguishable from an oversight, and nobody can tell later whether it still
+# holds. Empty in the template — an entity name is a fact about a repository, never
+# about the template it grew from.
+catalog_row_length_exclude: {}
 
 # check #6: filename substrings that mark a sent message living in the wrong place.
 # A file named like a message belongs in communication/, not in deliverables/.

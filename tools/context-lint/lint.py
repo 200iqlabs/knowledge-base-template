@@ -81,6 +81,22 @@ CLOSED_ICON = "🟢"
 # up in one line. Not a knob in config.yaml: it governs how the report reads, not what
 # counts as a problem, and the threshold that does is already configurable.
 ROW_LENGTH_FINDINGS_PER_FILE = 5
+# check #22: heading texts that mark a section holding the index's OWN change history.
+# Matched against the whole heading, not as a substring — an index may legitimately
+# catalogue a directory called `change-orders/` or a file named `decision-log.md`, and
+# a substring match would call those a changelog. Both languages, because the indexes
+# are written in whichever one the scope is written in.
+INDEX_LOG_HEADINGS = (
+    "recent changes",
+    "changelog",
+    "change log",
+    "historia zmian",
+    "ostatnie zmiany",
+    "update log",
+    "dziennik zmian",
+)
+# check #22: where the history belongs instead.
+CHANGELOG_FILE = "_changelog.md"
 # check #15: the prefix the template ships with. Not a value belonging to any repository
 # using it — a repository still carrying it has not been through the setup command.
 PLACEHOLDER_ID_PREFIX = "REPO"
@@ -281,6 +297,74 @@ def check_catalog(entity: str, cfg: dict, findings: list[Finding]) -> None:
                                     f"catalog entry points at a missing file: {t}"))
 
 
+def catalog_entries(text: str):
+    """Yield (line_number, stripped_line) for every entry in a catalog.md.
+
+    Two shapes, because the catalogs in a real repository are not uniform: a bullet
+    (`- \\`file\\` — what it is`) and a table row (`| question | file |`). Skipping the
+    table form would under-count by roughly a third — one large catalog here is written
+    entirely that way — and a threshold that silently ignores a format is a threshold
+    that means something different per file.
+
+    Separator rows (`|---|---|`) are not entries, and neither is a bullet carrying no
+    link or code span: a bare sentence in a catalog is prose around the list.
+    """
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if line.startswith("|"):
+            if set(line) <= set("|-: "):
+                continue
+            yield n, line
+        elif line.startswith("- "):
+            if "`" in line or "[" in line:
+                yield n, line
+
+
+def check_catalog_row_length(entity: str, cfg: dict, findings: list[Finding]) -> None:
+    """#21 a catalog.md entry that grew from a headline into a paragraph.
+
+    A catalog entry answers two questions — what is this file, and why would I open it.
+    Anything past that is a summary of the file, which belongs in the file. Nothing
+    bounded it until this check, although the same rule has bounded a closed `status.md`
+    row since #17; the threshold is deliberately the same value, for the same reason.
+
+    A WARN, not an ERROR, unlike #22: shortening an entry is an editorial act, the entry
+    is sometimes the only description a file has, and it cannot be repaired without a
+    human deciding what to keep. While the repository still carries a backlog of such
+    entries, an ERROR would make the linter permanently red and hand `/close-session`
+    scopes the session never touched. The level rises after the debt is paid, exactly
+    the road check #19 took.
+
+    Entities on the exclusion list are skipped whatever their entries look like — the
+    list carries the reason for each, so the exemption stays legible.
+
+    `.get` with defaults, same reason as #16 and #17: a config written before this check
+    existed keeps working instead of crashing the whole run on a missing key.
+    """
+    limit = cfg["thresholds"].get("catalog_row_max_chars", 1000)
+    excluded = cfg.get("catalog_row_length_exclude") or {}
+    if os.path.basename(entity) in excluded:
+        return
+    for dirpath, dirnames, filenames in os.walk(entity):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        if "catalog.md" not in filenames:
+            continue
+        p = os.path.join(dirpath, "catalog.md")
+        oversized = [len(line) for _, line in catalog_entries(read_text(p))
+                     if len(line) > limit]
+        # One finding per entry — the fix is per entry. Past the cap the tail is stated
+        # once, so a catalog where everything grew cannot bury every other check.
+        for n in oversized[:ROW_LENGTH_FINDINGS_PER_FILE]:
+            findings.append(Finding("WARN", "catalog-row-length", rel(p),
+                                    f"catalog entry is {n} characters (>{limit}) — an entry "
+                                    "says what the file is and why to open it; move the "
+                                    "summary into the file itself or into data/"))
+        if len(oversized) > ROW_LENGTH_FINDINGS_PER_FILE:
+            rest = len(oversized) - ROW_LENGTH_FINDINGS_PER_FILE
+            findings.append(Finding("WARN", "catalog-row-length", rel(p),
+                                    f"(+{rest} more entries over {limit} characters in this file)"))
+
+
 def check_index(root_cfg: dict, entities: list[str], findings: list[Finding]) -> None:
     """#2 index <-> folders (forward: folder without row; reverse: ghost row)."""
     base = os.path.join(REPO_ROOT, root_cfg["path"])
@@ -357,6 +441,67 @@ def check_index_files(root_cfg: dict, findings: list[Finding]) -> None:
         if not os.path.exists(os.path.normpath(os.path.join(base, t))):
             findings.append(Finding("ERROR", "index", rel(index_path),
                                     f"phantom index row with no file: {t}"))
+
+
+def _heading_text(line: str) -> str | None:
+    """Normalised text of a markdown ATX heading, or None when the line is not one."""
+    stripped = line.strip()
+    if not stripped.startswith("#"):
+        return None
+    text = stripped.lstrip("#")
+    if text and not text.startswith((" ", "\t")):
+        return None  # `#tag`, not a heading
+    return text.strip().strip(":").strip().lower()
+
+
+def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]) -> None:
+    """#22 an `_index.md` carrying the history of its own changes.
+
+    The index is read on every entry into the scope; its change history answers a
+    question almost nobody asks at that moment. Left inside, it grows without bound and
+    is paid for on every read — `context/projects/_index.md` reached 83 kB, of which
+    78 kB was its own log, with the convention against it already written in the file's
+    own header. A sentence in a header is not a guard; this is.
+
+    ERROR rather than WARN because the repair is mechanical and has one known
+    destination: the section moves to `_changelog.md` beside the index, losing nothing.
+    The whole backlog was paid in the change that introduced this check, so the level
+    does not make the linter permanently red — the condition check #19 had to meet.
+
+    Runs over every directory the config declares (scan roots, file scopes, the task
+    registry) rather than per entity: a nested `_index.md` deep inside `data/` is as
+    much an index as the scope root's.
+    """
+    seen: set[str] = set()
+    bases = [r["path"] for r in config.get("scan_roots", [])]
+    bases += [r["path"] for r in config.get("file_scopes", [])]
+    tcfg = config.get("task_registry") or {}
+    if tcfg.get("registry_path"):
+        bases.append(tcfg["registry_path"])
+
+    for base in bases:
+        abs_base = os.path.join(REPO_ROOT, base)
+        if not os.path.isdir(abs_base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(abs_base):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            if "_index.md" not in filenames:
+                continue
+            p = os.path.join(dirpath, "_index.md")
+            if p in seen:
+                continue
+            seen.add(p)
+            if scope_abs is not None and not os.path.abspath(p).startswith(scope_abs):
+                continue
+            for line in read_text(p).splitlines():
+                heading = _heading_text(line)
+                if heading is not None and heading in INDEX_LOG_HEADINGS:
+                    findings.append(Finding(
+                        "ERROR", "index-log", rel(p),
+                        f"index carries its own change history (`{line.strip()}`) — "
+                        f"move the section to {CHANGELOG_FILE} beside it; the index "
+                        "lists what the scope contains, not what happened to it"))
+                    break  # one finding per file: the fix is the whole section
 
 
 def check_names(entity: str, cfg: dict, findings: list[Finding]) -> None:
@@ -1071,6 +1216,7 @@ def run(config: dict, scope: str | None, today: _dt.date,
             SCANNED += 1
             check_structure(entity, root_cfg, findings)
             check_catalog(entity, config, findings)
+            check_catalog_row_length(entity, config, findings)
             check_names(entity, config, findings)
             check_comm_in_deliverables(entity, config, findings)
             check_status_size(entity, config, findings)
@@ -1093,6 +1239,10 @@ def run(config: dict, scope: str | None, today: _dt.date,
         # Task files are where a pasted address would land first: they are the thing an
         # agent quotes by identifier in every session.
         check_loopback_task_url(os.path.join(REPO_ROOT, tcfg["registry_path"]), tcfg, findings)
+
+    # Indexes live at scope roots and nested inside entities alike, so #22 runs once
+    # over every declared directory rather than per entity.
+    check_index_log(config, scope_abs, findings)
 
     # A link crosses entities, scopes and the registry alike, so #19 runs once over the
     # whole scope rather than per entity.
