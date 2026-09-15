@@ -81,6 +81,12 @@ CLOSED_ICON = "🟢"
 # up in one line. Not a knob in config.yaml: it governs how the report reads, not what
 # counts as a problem, and the threshold that does is already configurable.
 ROW_LENGTH_FINDINGS_PER_FILE = 5
+# check #21: a catalog entry may name its file in bold rather than in a code span or a
+# link — `- **offer_truth.md** — what it is` is as much an entry as the other two shapes,
+# and skipping it let an entry of any length pass unmeasured. Bold alone will not do:
+# catalogs also carry prose bullets opening on an emphasised phrase, so the bold run has
+# to end the way a file or a directory name ends.
+BOLD_FILE_RE = re.compile(r"- \*\*[^*]+(?:\.[A-Za-z0-9]+|/)\*\*")
 # check #22: heading texts that mark a section holding the index's OWN change history.
 # Matched against the whole heading, not as a substring — an index may legitimately
 # catalogue a directory called `change-orders/` or a file named `decision-log.md`, and
@@ -308,8 +314,9 @@ def catalog_entries(text: str):
     entirely that way — and a threshold that silently ignores a format is a threshold
     that means something different per file.
 
-    Separator rows (`|---|---|`) are not entries, and neither is a bullet carrying no
-    link or code span: a bare sentence in a catalog is prose around the list.
+    Separator rows (`|---|---|`) are not entries, and neither is a bullet that names no
+    file — by code span, by link, or by a bold run ending like a filename: a bare
+    sentence in a catalog is prose around the list.
     """
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
@@ -318,7 +325,7 @@ def catalog_entries(text: str):
                 continue
             yield n, line
         elif line.startswith("- "):
-            if "`" in line or "[" in line:
+            if "`" in line or "[" in line or BOLD_FILE_RE.match(line):
                 yield n, line
 
 
@@ -494,6 +501,10 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
     names any further trees to walk, so the guard's reach is a line in the config rather
     than a directory name compiled into a template that does not own it. Left out, the
     reach is the declared scopes and nothing else.
+
+    Fenced blocks are skipped: inside one the text is an example of a heading, not a
+    heading, and at ERROR level that difference is the difference between a guard and a
+    trap for whoever documents the rule in the file it governs.
     """
     seen: set[str] = set()
     bases = [r["path"] for r in config.get("scan_roots", [])]
@@ -520,7 +531,22 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
             # what a scoped run promises it will not.
             if scope_abs is not None and not _under(os.path.abspath(p), scope_abs):
                 continue
+            # A fenced block is an example, not a section. #22 is an ERROR, so an index
+            # quoting `## Recent Changes` to explain the very rule — which is exactly
+            # what a README-ish index would do — would otherwise fail the build over
+            # text that is not a heading at all.
+            fence = ""
             for line in read_text(p).splitlines():
+                bare = line.lstrip()
+                if bare.startswith("```") or bare.startswith("~~~"):
+                    marker = bare[0] * 3
+                    if not fence:
+                        fence = marker
+                    elif marker == fence:
+                        fence = ""
+                    continue
+                if fence:
+                    continue
                 heading = _heading_text(line)
                 if heading is not None and heading in INDEX_LOG_HEADINGS:
                     findings.append(Finding(
