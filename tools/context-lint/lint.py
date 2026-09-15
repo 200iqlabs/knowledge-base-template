@@ -87,6 +87,10 @@ ROW_LENGTH_FINDINGS_PER_FILE = 5
 # catalogs also carry prose bullets opening on an emphasised phrase, so the bold run has
 # to end the way a file or a directory name ends.
 BOLD_FILE_RE = re.compile(r"- \*\*[^*]+(?:\.[A-Za-z0-9]+|/)\*\*")
+# A line that opens a new list item is not the continuation of the one above it:
+# a nested bullet naming its own file is an entry in its own right, and folding it
+# into its parent would charge one entry for eleven.
+CONTINUATION_STOP_RE = re.compile(r"^(?:[-*+] |\d+[.)] |\|)")
 # check #22: heading texts that mark a section holding the index's OWN change history.
 # Matched against the whole heading, not as a substring — an index may legitimately
 # catalogue a directory called `change-orders/` or a file named `decision-log.md`, and
@@ -306,7 +310,7 @@ def check_catalog(entity: str, cfg: dict, findings: list[Finding]) -> None:
 
 
 def catalog_entries(text: str):
-    """Yield (line_number, stripped_line) for every entry in a catalog.md.
+    """Yield (line_number, entry_text) for every entry in a catalog.md.
 
     Two shapes, because the catalogs in a real repository are not uniform: a bullet
     (`- \\`file\\` — what it is`) and a table row (`| question | file |`). Skipping the
@@ -317,16 +321,39 @@ def catalog_entries(text: str):
     Separator rows (`|---|---|`) are not entries, and neither is a bullet that names no
     file — by code span, by link, or by a bold run ending like a filename: a bare
     sentence in a catalog is prose around the list.
+
+    A bullet is yielded with its wrapped continuation lines folded in, because an
+    entry is a logical item and a hard wrap is a typographic accident: measuring only
+    the first physical line let an entry of 2 000 characters pass under a threshold of
+    1 000 as long as the author pressed Enter. Seven entries in this repository were
+    invisible that way. A nested list item is NOT a continuation — it is its own entry,
+    measured on its own, so a bullet grouping eleven short ones does not inherit their
+    combined length. Folding stops at a blank line as well, which under-counts a
+    multi-paragraph item; that direction is the safe one for a threshold.
     """
-    for n, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
+    lines = text.splitlines()
+    n = 0
+    while n < len(lines):
+        line = lines[n].strip()
+        n += 1
         if line.startswith("|"):
             if set(line) <= set("|-: "):
                 continue
             yield n, line
         elif line.startswith("- "):
-            if "`" in line or "[" in line or BOLD_FILE_RE.match(line):
-                yield n, line
+            if not ("`" in line or "[" in line or BOLD_FILE_RE.match(line)):
+                continue
+            start = n
+            parts = [line]
+            while n < len(lines):
+                nxt = lines[n]
+                if not nxt.startswith((" ", "\t")) or not nxt.strip():
+                    break
+                if CONTINUATION_STOP_RE.match(nxt.strip()):
+                    break
+                parts.append(nxt.strip())
+                n += 1
+            yield start, " ".join(parts)
 
 
 def check_catalog_row_length(entity: str, cfg: dict, findings: list[Finding]) -> None:
