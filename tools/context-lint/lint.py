@@ -463,8 +463,37 @@ def check_index_files(root_cfg: dict, findings: list[Finding]) -> None:
                                     f"phantom index row with no file: {t}"))
 
 
+def _fence_run(line: str) -> tuple[str, int, str] | None:
+    """A markdown fence line as (character, run length, info string), else None.
+
+    Both halves of CommonMark's rule earn their place at ERROR level. A block opens on
+    three or more backticks or tildes indented by at most three spaces, and closes only
+    on a run of the SAME character, at least as long, carrying nothing but whitespace
+    after it. Taking every three-backtick line for a delimiter closed a four-backtick
+    block on the plain fence inside it — and an index that shows what a fenced example
+    looks like is exactly the file that carries one.
+    """
+    stripped = line.lstrip(" ")
+    if len(line) - len(stripped) > 3 or not stripped.startswith(("`", "~")):
+        return None
+    char = stripped[0]
+    length = len(stripped) - len(stripped.lstrip(char))
+    if length < 3:
+        return None
+    return char, length, stripped[length:].strip()
+
+
 def _heading_text(line: str) -> str | None:
-    """Normalised text of a markdown ATX heading, or None when the line is not one."""
+    """Normalised text of a markdown ATX heading, or None when the line is not one.
+
+    Indentation decides whether the line is a heading at all: CommonMark allows an ATX
+    heading up to three leading spaces, and four make it an indented code block. The
+    distinction earns its place for the same reason a fence does — #22 is an ERROR, so
+    an index showing `## Changelog` as an indented example would otherwise stop the run
+    over text that is not a heading.
+    """
+    if line[:1] == "\t" or len(line) - len(line.lstrip(" ")) > 3:
+        return None
     stripped = line.strip()
     if not stripped.startswith("#"):
         return None
@@ -502,9 +531,10 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
     than a directory name compiled into a template that does not own it. Left out, the
     reach is the declared scopes and nothing else.
 
-    Fenced blocks are skipped: inside one the text is an example of a heading, not a
-    heading, and at ERROR level that difference is the difference between a guard and a
-    trap for whoever documents the rule in the file it governs.
+    Code blocks are skipped — fenced by their own character and run length, or indented
+    by four spaces. Inside one the text is an example of a heading, not a heading, and
+    at ERROR level that difference is the difference between a guard and a trap for
+    whoever documents the rule in the file it governs.
     """
     seen: set[str] = set()
     bases = [r["path"] for r in config.get("scan_roots", [])]
@@ -535,17 +565,17 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
             # quoting `## Recent Changes` to explain the very rule — which is exactly
             # what a README-ish index would do — would otherwise fail the build over
             # text that is not a heading at all.
-            fence = ""
+            fence: tuple[str, int] | None = None
             for line in read_text(p).splitlines():
-                bare = line.lstrip()
-                if bare.startswith("```") or bare.startswith("~~~"):
-                    marker = bare[0] * 3
-                    if not fence:
-                        fence = marker
-                    elif marker == fence:
-                        fence = ""
+                run = _fence_run(line)
+                if run is not None:
+                    char, length, info = run
+                    if fence is None:
+                        fence = (char, length)
+                    elif char == fence[0] and length >= fence[1] and not info:
+                        fence = None
                     continue
-                if fence:
+                if fence is not None:
                     continue
                 heading = _heading_text(line)
                 if heading is not None and heading in INDEX_LOG_HEADINGS:
