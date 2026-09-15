@@ -102,6 +102,8 @@ CHANGELOG_FILE = "_changelog.md"
 PLACEHOLDER_ID_PREFIX = "REPO"
 # markdown link target: [text](target)
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+# the optional closing run of # on an ATX heading, and the whitespace before it
+ATX_CLOSING_RE = re.compile(r"\s+#+$")
 # frontmatter 'updated:' value or body 'Last updated:' value
 UPDATED_RE = re.compile(
     r"(?:^updated:\s*|Last updated:\**\s*)(\d{4}-\d{2}-\d{2})", re.IGNORECASE | re.MULTILINE
@@ -335,16 +337,27 @@ def check_catalog_row_length(entity: str, cfg: dict, findings: list[Finding]) ->
     scopes the session never touched. The level rises after the debt is paid, exactly
     the road check #19 took.
 
-    Entities on the exclusion list are skipped whatever their entries look like — the
-    list carries the reason for each, so the exemption stays legible.
+    Entities on the exclusion list are skipped whatever their entries look like — but
+    only when the list actually carries the reason. An exemption with a blank reason is
+    indistinguishable from an oversight, which is the whole ground on which the config
+    format requires one; honouring it would let a one-word edit disable the check with
+    nothing left to argue with later. So a reasonless entry is reported and the entity
+    is checked anyway.
 
     `.get` with defaults, same reason as #16 and #17: a config written before this check
     existed keeps working instead of crashing the whole run on a missing key.
     """
     limit = cfg["thresholds"].get("catalog_row_max_chars", 1000)
     excluded = cfg.get("catalog_row_length_exclude") or {}
-    if os.path.basename(entity) in excluded:
-        return
+    name = os.path.basename(entity)
+    if name in excluded:
+        if str(excluded.get(name) or "").strip():
+            return
+        findings.append(Finding("WARN", "catalog-row-length", rel(entity),
+                                "entity is on catalog_row_length_exclude with no reason "
+                                "— an exemption nobody can argue with later is "
+                                "indistinguishable from an oversight, so the check runs "
+                                "anyway; write the reason or drop the entry"))
     for dirpath, dirnames, filenames in os.walk(entity):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         if "catalog.md" not in filenames:
@@ -451,6 +464,10 @@ def _heading_text(line: str) -> str | None:
     text = stripped.lstrip("#")
     if text and not text.startswith((" ", "\t")):
         return None  # `#tag`, not a heading
+    # CommonMark lets an ATX heading close with a run of #, preceded by whitespace:
+    # `## Changelog ##` is the same heading as `## Changelog`. Left in, those hashes
+    # ride along in the compared text and the heading silently stops matching.
+    text = ATX_CLOSING_RE.sub("", text.strip())
     return text.strip().strip(":").strip().lower()
 
 
@@ -471,6 +488,12 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
     Runs over every directory the config declares (scan roots, file scopes, the task
     registry) rather than per entity: a nested `_index.md` deep inside `data/` is as
     much an index as the scope root's.
+
+    Those three cover the scopes the rest of the linter knows about, and an index can
+    sit outside all of them — a generated one under `operations/`, say. `index_log_roots`
+    names any further trees to walk, so the guard's reach is a line in the config rather
+    than a directory name compiled into a template that does not own it. Left out, the
+    reach is the declared scopes and nothing else.
     """
     seen: set[str] = set()
     bases = [r["path"] for r in config.get("scan_roots", [])]
@@ -478,6 +501,7 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
     tcfg = config.get("task_registry") or {}
     if tcfg.get("registry_path"):
         bases.append(tcfg["registry_path"])
+    bases += list(config.get("index_log_roots") or [])
 
     for base in bases:
         abs_base = os.path.join(REPO_ROOT, base)
@@ -491,7 +515,10 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
             if p in seen:
                 continue
             seen.add(p)
-            if scope_abs is not None and not os.path.abspath(p).startswith(scope_abs):
+            # Component boundary, not a string prefix: `.../QAMERA_AI` must not select
+            # `.../QAMERA_AI-OLD`, which is exactly what a bare startswith would do and
+            # what a scoped run promises it will not.
+            if scope_abs is not None and not _under(os.path.abspath(p), scope_abs):
                 continue
             for line in read_text(p).splitlines():
                 heading = _heading_text(line)
@@ -1260,6 +1287,16 @@ def _within(entity: str, scope_abs: str) -> bool:
     """True when entity is inside scope, or scope is inside entity (root selected)."""
     e = os.path.abspath(entity)
     return e.startswith(scope_abs) or scope_abs.startswith(e)
+
+
+def _under(path_abs: str, scope_abs: str) -> bool:
+    """True when path is the scope itself or sits beneath it, by path component.
+
+    `startswith` on the raw strings would answer yes for a sibling whose name merely
+    begins with the scope's — `PROJECT` selecting `PROJECT-OLD` — and a scoped run
+    that reports findings from outside its scope is worse than one that reports none.
+    """
+    return path_abs == scope_abs or path_abs.startswith(scope_abs + os.sep)
 
 
 def emit(findings: list[Finding], as_json: bool) -> None:

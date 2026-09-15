@@ -47,6 +47,15 @@ thresholds:
 # about the template it grew from.
 catalog_row_length_exclude: {}
 
+# check #22: further trees to walk for `_index.md`, beyond the scopes declared above.
+# The scan roots, file scopes and the task registry cover the scopes the rest of the
+# linter knows about, and an index can sit outside all of them — a generated one under
+# an operations tree, say. Naming those trees here keeps the guard's reach a line of
+# configuration instead of a directory name compiled into the template, which does not
+# own the layout of any repository built from it. Empty: the template declares one
+# scope and it is already covered.
+index_log_roots: []
+
 # check #6: filename substrings that mark a sent message living in the wrong place.
 # A file named like a message belongs in communication/, not in deliverables/.
 communication_patterns:
