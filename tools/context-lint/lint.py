@@ -491,13 +491,21 @@ def _heading_text(line: str) -> str | None:
     distinction earns its place for the same reason a fence does — #22 is an ERROR, so
     an index showing `## Changelog` as an indented example would otherwise stop the run
     over text that is not a heading.
+
+    The level is bounded for the same reason, in the other direction: ATX stops at six
+    hashes, so `####### Changelog` is a paragraph that begins with punctuation. Reading
+    it as a heading would fail the run over a line Markdown renders as ordinary text —
+    and the obvious way to write a heading level out of action is to add a hash.
     """
     if line[:1] == "\t" or len(line) - len(line.lstrip(" ")) > 3:
         return None
     stripped = line.strip()
     if not stripped.startswith("#"):
         return None
-    text = stripped.lstrip("#")
+    level = len(stripped) - len(stripped.lstrip("#"))
+    if level > 6:
+        return None  # seven hashes is a paragraph, not a heading
+    text = stripped[level:]
     if text and not text.startswith((" ", "\t")):
         return None  # `#tag`, not a heading
     # CommonMark lets an ATX heading close with a run of #, preceded by whitespace:
@@ -552,14 +560,30 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             if "_index.md" not in filenames:
                 continue
-            p = os.path.join(dirpath, "_index.md")
+            # Normalised before the `seen` test, not after: the declared bases are
+            # written with forward slashes, so on Windows one walk yields
+            # `...\context/qamera/prospects\_index.md` and another
+            # `...\context\qamera\prospects\_index.md` for the same file. Two spellings,
+            # one file, and a config that names both a tree and a scope inside it —
+            # which is the normal case — reported it twice.
+            p = os.path.abspath(os.path.join(dirpath, "_index.md"))
             if p in seen:
                 continue
             seen.add(p)
             # Component boundary, not a string prefix: `.../QAMERA_AI` must not select
             # `.../QAMERA_AI-OLD`, which is exactly what a bare startswith would do and
             # what a scoped run promises it will not.
-            if scope_abs is not None and not _under(os.path.abspath(p), scope_abs):
+            #
+            # Tested in both directions, because the index a narrowed run is likeliest
+            # to have touched is the one ABOVE it: the index protocol makes updating the
+            # scope's `_index.md` part of editing any entity inside it. Downwards only
+            # dropped exactly that file — a run scoped to one entity, or to one
+            # file-shaped prospect, never looked at the index it had just rewritten, and
+            # a log section there went unreported until somebody ran the whole
+            # repository. The other index checks include the ancestor root already.
+            here = os.path.abspath(dirpath)
+            if scope_abs is not None and not (
+                    _under(here, scope_abs) or _under(scope_abs, here)):
                 continue
             # A fenced block is an example, not a section. #22 is an ERROR, so an index
             # quoting `## Recent Changes` to explain the very rule — which is exactly

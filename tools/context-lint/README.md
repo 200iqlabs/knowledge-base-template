@@ -70,16 +70,20 @@ ERROR is present, `2` on a dependency/config failure.
 
 Two shapes, because a knowledge base usually has both:
 
-- **`scan_roots`** — entities are folders. Checks #1–#13 and #16–#18 apply.
+- **`scan_roots`** — entities are folders. Checks #1–#13, #16–#18 and #21 apply.
   Configured in `config.yaml`; the template ships with `context/projects`.
   An empty scan root is not an error.
 - **`file_scopes`** — entities are single `.md` files, no folder. **Only check #2**
-  applies, in its file variant. Empty by default.
+  applies to the entities themselves, in its file variant. Empty by default.
 - **`task_registry`** — `context/tasks/`, which is not an entity: no `status.md`, no
   `catalog.md`, no row in any `_index.md`. Checks #10, #11 and #12 run over the company-level
   task files, #14 and #15 over the whole repository, #18 over the registry
   directory as well. Runs once
   per lint, not per entity.
+- **#22** cuts across all three shapes rather than belonging to one: it walks every
+  tree they declare — plus anything named in `index_log_roots` — looking for
+  `_index.md`. A file-shaped scope and the registry each keep one, and an index is an
+  index wherever it sits.
 - **#19** and **#20** run once over the whole repository (or under `PATH`), not per entity —
   a link crosses entities, scopes and the registry alike. They read two different file sets,
   and that difference is deliberate: **#19** asks about every **tracked** `.md`, because a

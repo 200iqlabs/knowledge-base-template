@@ -16,7 +16,9 @@ scan_roots:
     index: _index.md
 
 # File-shaped scopes: one .md per entity, no folder. Only the index<->files check
-# applies here. Leave empty until you have a scope shaped that way.
+# applies to the entities themselves — but check #22 walks these trees too, because the
+# `_index.md` at the root of a file-shaped scope is an index like any other.
+# Leave empty until you have a scope shaped that way.
 file_scopes: []
 
 thresholds:
