@@ -493,12 +493,20 @@ def check_index_files(root_cfg: dict, findings: list[Finding]) -> None:
 def _fence_run(line: str) -> tuple[str, int, str] | None:
     """A markdown fence line as (character, run length, info string), else None.
 
-    Both halves of CommonMark's rule earn their place at ERROR level. A block opens on
-    three or more backticks or tildes indented by at most three spaces, and closes only
-    on a run of the SAME character, at least as long, carrying nothing but whitespace
-    after it. Taking every three-backtick line for a delimiter closed a four-backtick
-    block on the plain fence inside it — and an index that shows what a fenced example
-    looks like is exactly the file that carries one.
+    All three clauses of CommonMark's fence rule earn their place at ERROR level. A
+    block opens on three or more backticks or tildes indented by at most three spaces,
+    and closes only on a run of the SAME character, at least as long, carrying nothing
+    but whitespace after it. Taking every three-backtick line for a delimiter closed a
+    four-backtick block on the plain fence inside it — and an index that shows what a
+    fenced example looks like is exactly the file that carries one.
+
+    The third clause: a backtick fence carries no backtick in its info string, because
+    otherwise a sentence with inline code in it would open blocks. So ``` followed by
+    `` `## Recent Changes` `` is a paragraph, and reading it as a fence opens a block
+    that never closes, swallowing every heading below it. That failure is silent and
+    points the wrong way — the guard goes off rather than firing wrongly, which is the
+    mode a check is least likely to be caught in. A tilde fence has no such rule, and
+    backticks in its info string are ordinary text.
     """
     stripped = line.lstrip(" ")
     if len(line) - len(stripped) > 3 or not stripped.startswith(("`", "~")):
@@ -507,7 +515,10 @@ def _fence_run(line: str) -> tuple[str, int, str] | None:
     length = len(stripped) - len(stripped.lstrip(char))
     if length < 3:
         return None
-    return char, length, stripped[length:].strip()
+    info = stripped[length:].strip()
+    if char == "`" and "`" in info:
+        return None  # inline code in a sentence, not a fence
+    return char, length, info
 
 
 def _heading_text(line: str) -> str | None:
