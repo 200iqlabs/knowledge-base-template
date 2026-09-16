@@ -38,9 +38,10 @@ reached. Background and the three trust levels: the core `CLAUDE.md`, *Trust*.
    — material that is put down (`archive/`, `communication/`, `output/`, `inbox/`)
    records what happened and is not confirmed, `tasks/` carries its own header contract,
    and a `data/` nested inside any of those is still put-down material — or the file's
-   existing `verified` field is malformed, which this command reports rather than
-   repairs. Do not look for a way around either: the scope is a decision written in the
-   config, and a broken entry is the person's to fix.
+   existing `verified` field is malformed by the linter's own definition, which this
+   command reports rather than repairs, or its header cannot be read well enough to say
+   whether the field is already there. Do not look for a way around any of them: the
+   scope is a decision written in the config, and a broken header is the person's to fix.
 
 3. Report what was written — the file, the actor, the timestamp, and how many entries the
    file now carries. Then **run the linter over that file** so a malformed header is

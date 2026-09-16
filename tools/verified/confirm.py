@@ -16,8 +16,11 @@ Scope is read from the linter's config and applied the way check #23 applies it 
 same scanned roots, the same `verified_scope` directories and exclusions, the same
 `.md`-only rule — so the two cannot disagree about which files carry settled facts. A
 header this command could write somewhere the check never looks would be a confirmation
-nothing ever validates. Identity comes from the task schema's `default_owner`, so the id
-is the same one the task registry uses and nobody retypes it per invocation.
+nothing ever validates. What counts as a malformed entry is read from the check itself
+for the same reason: an entry this command extends while the linter reports it as an
+ERROR is a file that says a confirmation was recorded into a field that cannot be read.
+Identity comes from the task schema's `default_owner`, so the id is the same one the task
+registry uses and nobody retypes it per invocation.
 
 The file is rewritten by editing the frontmatter block alone: every other byte, including
 comments and key order, survives untouched. Only the `verified` block is re-emitted, and
@@ -38,22 +41,34 @@ except ImportError:
     sys.exit(2)
 
 
-def lint_module():
-    """Import the linter, for the scope rules the two tools must not disagree about.
+_LINT = None
 
-    Which directories hold settled facts is repository data and comes from the config.
-    Which directories hold material that is put DOWN rather than settled is doctrine, the
-    same in every repository, so it lives beside the check that enforces it and is read
-    from there. Copying the list here would work until one side gained a name the other
-    did not, and the first symptom would be a confirmation written into a tree check #23
-    never walks — validated, therefore, by nothing.
+
+def lint_module():
+    """Import the linter, for the rules the two tools must not disagree about.
+
+    Two of them, and both for the same reason. Which directories hold material that is
+    put DOWN rather than settled (`VERIFIED_PUT_DOWN_DIRS`) decides which files may carry
+    a confirmation; what counts as a malformed entry (`verified_entry_problems`) decides
+    which of them this command will extend. Both are doctrine, the same in every
+    repository — only the directory names that hold settled facts are repository data,
+    and those come from the config.
+
+    Copying either here would work until one side changed, and both failures are silent.
+    A scope the two read differently writes a confirmation into a tree check #23 never
+    walks — validated, therefore, by nothing. A definition of malformed the two read
+    differently appends to a file the check calls broken, and reports a confirmation
+    recorded into a field the linter says cannot be read.
     """
+    global _LINT
+    if _LINT is not None:
+        return _LINT
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         os.pardir, "context-lint", "lint.py")
     spec = importlib.util.spec_from_file_location("context_lint_for_confirm", path)
     if spec is None or spec.loader is None:  # pragma: no cover - a broken checkout
-        fail(f"cannot load the linter from {path}, which holds the scope rules this "
-             "command shares with check #23")
+        fail(f"cannot load the linter from {path}, which holds the rules this command "
+             "shares with check #23")
     module = importlib.util.module_from_spec(spec)
     # Registered before it is executed: the linter defines a dataclass at import time,
     # and `@dataclass` resolves its own module through `sys.modules`. Left out, the
@@ -61,6 +76,7 @@ def lint_module():
     # what actually went wrong.
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    _LINT = module
     return module
 
 
@@ -169,6 +185,49 @@ def block_end(fm_lines: list[str], start: int) -> int:
     return end
 
 
+def refuse_unlocatable_key(fm_lines: list[str]) -> None:
+    """Refuse rather than append when the header may already hold `verified` unseen.
+
+    The scan above reads the key off the start of a line, which is how every header in
+    this base is written — but not the only shape YAML calls a top-level key. A quoted
+    key (`'verified': [...]`) and a flow mapping (`{verified: [...], title: t}`) parse to
+    the same key and check #23 reads both; the line scan sees neither. Appending there
+    would write a SECOND `verified` key into the same mapping, and a parser keeps one of
+    them — so the entries already recorded would disappear with nothing said, which is
+    the one outcome an append-only field must never produce.
+
+    So the question is asked of the parser, not of the text, and a key that is present
+    but cannot be located in the bytes ends in a refusal. Locating it structurally and
+    rewriting around it would mean re-emitting a header this command did not write, and
+    the contract is to touch the `verified` block and nothing else. A refusal costs the
+    person one manual edit and can lose nothing.
+
+    A header that does not parse at all gets the same answer, because it is the same
+    question unanswered: whether the field is already there cannot be told, and check #23
+    reports such a header as unreadable anyway.
+    """
+    text = "".join(fm_lines)
+    try:
+        header = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        fail("the header does not parse as YAML, so whether it already carries "
+             f"`verified` cannot be told and appending could write the key twice: {exc} "
+             "— the file was left untouched; check #23 reports an unreadable header for "
+             "the same reason")
+    if header is None:  # an empty header: nothing to collide with
+        return
+    if not isinstance(header, dict):
+        fail(f"the header does not read back as a mapping ({header!r}), so a `verified` "
+             "key cannot be added to it without rewriting what is there — the file was "
+             "left untouched")
+    if "verified" in header:
+        fail("the header carries a `verified` key that does not open a line of its own — "
+             "quoted, or inside a flow mapping. Appending here would write the key a "
+             "second time and a parser keeps only one, so the confirmations already "
+             "recorded would be lost without a word; the file was left untouched. Put "
+             "the field on its own line and run this again")
+
+
 def existing_entries(fm_lines: list[str]) -> tuple[list[dict], int, int]:
     """Parse the `verified` block. Returns (entries, first line index, line count).
 
@@ -189,6 +248,7 @@ def existing_entries(fm_lines: list[str]) -> tuple[list[dict], int, int]:
             start = i
             break
     if start is None:
+        refuse_unlocatable_key(fm_lines)
         return [], -1, 0
     end = block_end(fm_lines, start)
     block = "".join(fm_lines[start:end])
@@ -222,26 +282,35 @@ def existing_entries(fm_lines: list[str]) -> tuple[list[dict], int, int]:
     # exactly what check #23 reports — and an entry missing both keys renders as no
     # lines at all, so appending would delete it without saying so.
     for entry in entries:
-        if not isinstance(entry, dict):
-            fail(f"an existing `verified` entry is {entry!r} and not a mapping with `by` "
-                 "and `at` — the file was left untouched; check #23 reports this shape "
-                 "and repairing it is the person's call, not this script's")
-        missing = [k for k in ("by", "at") if k not in entry]
-        if missing:
-            fail(f"an existing `verified` entry has no "
-                 f"{' and no '.join('`' + k + '`' for k in missing)} ({entry!r}) — check "
-                 "#23 reports that shape; this command appends rather than repairs, so "
-                 "the file was left untouched")
+        # Judged by the linter's own definition, not by a second one written here. A
+        # missing key is not the only way an entry is malformed — an actor written
+        # `pawel` instead of `human:pawel`, or an `at` that is a bare date, is an ERROR
+        # check #23 reports, and appending beneath it would leave the file broken while
+        # this command printed that a confirmation had been recorded.
+        problems = lint_module().verified_entry_problems(entry)
+        if problems:
+            fail(f"an existing `verified` entry ({entry!r}) is malformed: "
+                 + "; ".join(problems)
+                 + " — check #23 reports exactly this, and the command appends rather "
+                   "than repairs, so the file was left untouched; repairing it is the "
+                   "person's call, not this script's")
     return entries, start, end - start
 
 
-def emit_value(value) -> str:
-    """Serialise one value the way YAML will read it back, on a single line.
+def emit_node(value, role: str = "value") -> str:
+    """Serialise one key or value the way YAML will read it back, on a single line.
 
     Formatting an existing entry back with an f-string looked harmless while every value
     was an id and a timestamp, but the contract allows extra keys, and `note: checked #1`
     written unquoted is truncated at the `#` the next time the file is read. Re-emitting
     an entry must not change what it says, so the emitter decides the quoting.
+
+    Keys go through the same door as values, and for the same reason turned one step
+    further: a key written `note #1` comes back as `note` followed by a comment, so the
+    key vanishes and the value with it — the entry says less than it did before an
+    append-only command touched it. There is no shape of text that is safe as a key but
+    not as a value, so one emitter serves both, and `role` only names which of them the
+    refusal is about.
 
     A datetime is written as its own ISO form rather than through the emitter: it is
     always plain-safe, it reads back as the same instant, and it keeps the canonical
@@ -255,13 +324,13 @@ def emit_value(value) -> str:
                                     allow_unicode=True, sort_keys=False,
                                     width=10 ** 6).strip()
         except yaml.YAMLError as exc:
-            fail(f"an existing `verified` entry holds a value this script cannot write "
+            fail(f"an existing `verified` entry holds a {role} this script cannot write "
                  f"back unchanged ({value!r}): {exc}")
         if dumped.endswith("\n..."):  # the document-end marker PyYAML adds to bare scalars
             dumped = dumped[: -len("\n...")].strip()
         if "\n" not in dumped:
             return dumped
-    fail(f"an existing `verified` entry holds a value with no single-line YAML form "
+    fail(f"an existing `verified` entry holds a {role} with no single-line YAML form "
          f"({value!r}) — the file was left untouched")
 
 
@@ -274,7 +343,8 @@ def render(entries: list[dict], eol: str) -> list[str]:
             if key not in entry:
                 continue
             prefix = "  - " if first else "    "
-            out.append(f"{prefix}{key}: {emit_value(entry[key])}{eol}")
+            out.append(f"{prefix}{emit_node(key, 'key')}: "
+                       f"{emit_node(entry[key])}{eol}")
             first = False
     return out
 

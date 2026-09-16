@@ -721,6 +721,42 @@ def _verified_at_error(at) -> str | None:
     return None if parsed.tzinfo is not None else "no UTC offset"
 
 
+def verified_entry_problems(entry) -> list[str]:
+    """Every way one `verified` entry is malformed, in the words check #23 reports.
+
+    Named once, here, for the same reason as `VERIFIED_PUT_DOWN_DIRS`: the confirmation
+    command reads this too, and the two must not hold different opinions about what
+    malformed means. A second copy would agree on the day it was written and drift on the
+    first change to either — and the failure it produces is silent in the worst way. The
+    command appends rather than repairs, so an entry it waves through while the check
+    calls it an ERROR leaves a file that reports a confirmation was recorded and a linter
+    that says the field is broken, with nothing to say which of them to believe.
+
+    An empty list means the entry is well formed; the order is the order a reader fixes
+    them in.
+    """
+    if not isinstance(entry, dict):
+        return [f"`verified` entry is not a mapping ({entry!r}) — each entry carries "
+                "`by` and `at`"]
+    problems = []
+    if "by" not in entry:
+        problems.append("`verified` entry has no `by` — it records that something was "
+                        "confirmed without recording by whom, which is the one question "
+                        "the field exists to answer")
+    elif not _VERIFIED_ACTOR_RE.match(str(entry["by"]).strip()):
+        problems.append(f"`verified` actor `{entry['by']}` carries no recognised kind — "
+                        f"use {_VERIFIED_ACTOR_HELP}")
+    if "at" not in entry:
+        problems.append("`verified` entry has no `at` — a confirmation with no time "
+                        "cannot be compared with the file's last change")
+    else:
+        why = _verified_at_error(entry["at"])
+        if why:
+            problems.append(f"`verified` time `{entry['at']}` is {why} — use ISO 8601 "
+                            "with an explicit UTC offset, e.g. 2026-03-04T11:20:00+01:00")
+    return problems
+
+
 def check_verified_shape(config: dict, scope_abs: str | None,
                          findings: list[Finding]) -> None:
     """#23 a confirmation trace that is present but malformed.
@@ -821,33 +857,8 @@ def check_verified_shape(config: dict, scope_abs: str | None,
                                         "single entry — each entry carries `by` and `at`"))
                 continue
             for entry in entries:
-                if not isinstance(entry, dict):
-                    findings.append(Finding("ERROR", "verified-shape", relpath,
-                                            f"`verified` entry is not a mapping ({entry!r}) "
-                                            "— each entry carries `by` and `at`"))
-                    continue
-                if "by" not in entry:
-                    findings.append(Finding("ERROR", "verified-shape", relpath,
-                                            "`verified` entry has no `by` — it records that "
-                                            "something was confirmed without recording by "
-                                            "whom, which is the one question the field "
-                                            "exists to answer"))
-                elif not _VERIFIED_ACTOR_RE.match(str(entry["by"]).strip()):
-                    findings.append(Finding("ERROR", "verified-shape", relpath,
-                                            f"`verified` actor `{entry['by']}` carries no "
-                                            f"recognised kind — use {_VERIFIED_ACTOR_HELP}"))
-                if "at" not in entry:
-                    findings.append(Finding("ERROR", "verified-shape", relpath,
-                                            "`verified` entry has no `at` — a confirmation "
-                                            "with no time cannot be compared with the "
-                                            "file's last change"))
-                else:
-                    why = _verified_at_error(entry["at"])
-                    if why:
-                        findings.append(Finding("ERROR", "verified-shape", relpath,
-                                                f"`verified` time `{entry['at']}` is {why} "
-                                                "— use ISO 8601 with an explicit UTC "
-                                                "offset, e.g. 2026-03-04T11:20:00+01:00"))
+                for problem in verified_entry_problems(entry):
+                    findings.append(Finding("ERROR", "verified-shape", relpath, problem))
 
 def check_names(entity: str, cfg: dict, findings: list[Finding]) -> None:
     """#3 date-prefix convention in communication/ and archive/."""
