@@ -130,11 +130,26 @@ def write_json(path: str, payload, **dump) -> None:
 
 # --- the repository ----------------------------------------------------------
 
+# Windows gives a console to any console application started by a process that has none.
+# The build below is started without one deliberately (`start_background_build`), so every
+# `git` call it makes was opening a window: on a host whose default terminal is Windows
+# Terminal, a tab per call, taking focus off whatever was being typed, and now and then
+# printing `error 2147942632 (0x800700e8)` when the handoff met stdio already closed. The
+# same happens to the status line whenever its own process was started windowless. One
+# flag on every spawn is the whole fix — measured: with it the child reports no console
+# window at all, and git still answers normally.
+#
+# An empty mapping on POSIX rather than `creationflags=0`: subprocess rejects the argument
+# there outright. relink.py carries the same two lines, because either tool runs when the
+# other is absent and neither may import the constant from the other.
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}
+
+
 def repo_root(explicit: str | None) -> str:
     if explicit:
         return os.path.abspath(explicit)
     out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, **NO_WINDOW)
     return out.stdout.strip() if out.returncode == 0 else os.getcwd()
 
 
@@ -341,7 +356,7 @@ def untracked_markdown(root: str) -> set[str]:
     out = subprocess.run(["git", "-C", root, "ls-files", "--others",
                           "--exclude-standard", "-z", "--", "*.md"],
                          capture_output=True, encoding="utf-8",
-                         errors="surrogateescape")
+                         errors="surrogateescape", **NO_WINDOW)
     if out.returncode != 0:
         return set()                  # not a git checkout: the walk is all there is
     return {p for p in out.stdout.split("\0") if p}
@@ -1106,7 +1121,13 @@ def start_background_build(config_path: str, root: str, state_dir: str,
     config_path = os.path.abspath(config_path)
     flags = {}
     if os.name == "nt":
-        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — no console, no signal inheritance
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — no console, no signal inheritance.
+        # Having no console is what this child is for, and it is also what used to make it
+        # flash windows: Windows gives a console to a console application whose parent has
+        # none, so every `git` this build runs was opening one. The fix is NO_WINDOW at
+        # each of those calls, not here — CREATE_NO_WINDOW is *ignored* when it travels
+        # with DETACHED_PROCESS, so adding it to this line would read like the guard and
+        # be none. Do not "simplify" it back out of the git calls.
         flags["creationflags"] = 0x00000008 | 0x00000200
     else:
         flags["start_new_session"] = True
