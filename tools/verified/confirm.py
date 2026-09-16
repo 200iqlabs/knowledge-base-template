@@ -209,8 +209,22 @@ def block_end(fm_lines: list[str], start: int) -> int:
     return end
 
 
-def refuse_unlocatable_key(fm_lines: list[str]) -> None:
-    """Refuse rather than append when the header may already hold `verified` unseen.
+def flow_mapping_header(text: str) -> bool:
+    """True when the whole header is ONE flow mapping — `{title: t}`, not a line per key.
+
+    Asked of the parser, like every other question here. The composer marks the root node
+    with the style it was written in, which is the only reliable answer: a header whose
+    VALUES are flow collections (`tags: [a, b]`) is a block mapping and takes an appended
+    key perfectly well, so counting braces in the text would refuse the wrong files.
+    Composing cannot fail where the `safe_load` below succeeded — it is the same parse,
+    stopped one step short of building the objects.
+    """
+    node = yaml.compose(text, Loader=yaml.SafeLoader)
+    return isinstance(node, yaml.MappingNode) and bool(node.flow_style)
+
+
+def refuse_unappendable_header(fm_lines: list[str]) -> None:
+    """Refuse rather than append when a new `verified:` line cannot safely be added.
 
     The scan above reads the key off the start of a line, which is how every header in
     this base is written — but not the only shape YAML calls a top-level key. A quoted
@@ -225,6 +239,16 @@ def refuse_unlocatable_key(fm_lines: list[str]) -> None:
     rewriting around it would mean re-emitting a header this command did not write, and
     the contract is to touch the `verified` block and nothing else. A refusal costs the
     person one manual edit and can lose nothing.
+
+    A header written as a flow mapping is refused even when it carries no `verified` at
+    all, and that is the same rule reaching one step further. The block is emitted as
+    lines placed beneath what is already there, and beneath `{title: t}` is OUTSIDE the
+    braces: the mapping ended at `}`, so the appended key is a second node and a header
+    that parsed a moment ago stops parsing at all. An append-only command would have
+    destroyed what the file already said — the exact damage the paragraph above exists to
+    prevent, arrived at from the other side. Reshaping the header into block style would
+    fix it and is deliberately not done here: it is a rewrite of somebody else's lines,
+    and this command writes the `verified` block and nothing else.
 
     A header that does not parse at all gets the same answer, because it is the same
     question unanswered: whether the field is already there cannot be told, and check #23
@@ -250,6 +274,13 @@ def refuse_unlocatable_key(fm_lines: list[str]) -> None:
              "second time and a parser keeps only one, so the confirmations already "
              "recorded would be lost without a word; the file was left untouched. Put "
              "the field on its own line and run this again")
+    if flow_mapping_header(text):
+        fail("the header is written as one flow mapping (`{title: t}`), so there is no "
+             "line to add a key to: a `verified:` block placed beneath it would fall "
+             "outside the closing brace and the header would stop parsing altogether — "
+             "the file was left untouched. Rewriting the header into block style, one "
+             "key per line, is the repair, and it is yours to make: this command writes "
+             "the `verified` block and touches nothing else. Then run this again")
 
 
 def existing_entries(fm_lines: list[str]) -> tuple[list[dict], int, int]:
@@ -272,7 +303,7 @@ def existing_entries(fm_lines: list[str]) -> tuple[list[dict], int, int]:
             start = i
             break
     if start is None:
-        refuse_unlocatable_key(fm_lines)
+        refuse_unappendable_header(fm_lines)
         return [], -1, 0
     end = block_end(fm_lines, start)
     block = "".join(fm_lines[start:end])
