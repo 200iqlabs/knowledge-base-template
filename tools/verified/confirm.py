@@ -89,9 +89,33 @@ def repo_root() -> str:
         return os.path.abspath(os.getcwd())
 
 
-def load_yaml(path: str) -> dict:
-    with io.open(path, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+def load_yaml(path: str, flag: str) -> dict:
+    """Read one of the two configuration files into a mapping, or refuse with a sentence.
+
+    Both paths arrive on the command line, so a typo in one is the ORDINARY failure here,
+    not an exotic one — and every other refusal in this script goes through `fail()`. Left
+    bare, this one place would answer a mistyped `--config` with a traceback, which says
+    what raised rather than what to do about it, and reads like a crash rather than a
+    refusal. The message names the flag, because "no such file" is useless when two paths
+    were passed.
+
+    A file that parses to something other than a mapping is refused for the same reason
+    rather than left to fail later: the callers ask it for keys, and an AttributeError
+    three frames down would name `.get` rather than the file that has the wrong shape.
+    """
+    try:
+        with io.open(path, "r", encoding="utf-8") as fh:
+            loaded = yaml.safe_load(fh)
+    except OSError as exc:
+        fail(f"cannot read {flag} {path}: {exc}")
+    except yaml.YAMLError as exc:
+        fail(f"{flag} {path} is not valid YAML and nothing was written: {exc}")
+    if loaded is None:  # an empty file: no keys, and the callers handle their absence
+        return {}
+    if not isinstance(loaded, dict):
+        fail(f"{flag} {path} does not read back as a mapping ({loaded!r}) — this command "
+             "reads named keys out of it, and there are none to read")
+    return loaded
 
 
 def fail(message: str) -> None:
@@ -362,8 +386,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     root = os.path.realpath(repo_root())
-    config = load_yaml(args.config)
-    schema = load_yaml(args.schema)
+    config = load_yaml(args.config, "--config")
+    schema = load_yaml(args.schema, "--schema")
 
     vcfg = config.get("verified_scope") or {}
     dirs = list(vcfg.get("dirs") or [])
