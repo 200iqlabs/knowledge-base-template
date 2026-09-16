@@ -58,6 +58,21 @@ catalog_row_length_exclude: {}
 # scope and it is already covered.
 index_log_roots: []
 
+# check #23: where the shape of the confirmation trace (`verified`) is checked at all.
+# Only the shape of an entry somebody chose to write is checked — an absent field is
+# silence, because "unconfirmed" is the base's legal default state rather than a debt,
+# and warning about absence would turn the run into noise across thousands of files.
+# `dirs` are directory names matched at any depth inside an entity, so
+# `CLIENT/PROJECT/data/` counts exactly as `CLIENT/data/` does. `exclude` maps a subtree
+# to the reason it is out of scope; a reasonless entry is reported and checked anyway,
+# the same rule `catalog_row_length_exclude` carries.
+#
+# Empty here on purpose: which directories carry settled facts, and which hold machine
+# records that nobody confirms one by one, is repository data — a template that named
+# them would be naming somebody else's layout. An unconfigured check is skipped in
+# silence.
+verified_scope: {}
+
 # check #6: filename substrings that mark a sent message living in the wrong place.
 # A file named like a message belongs in communication/, not in deliverables/.
 communication_patterns:

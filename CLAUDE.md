@@ -468,6 +468,92 @@ they live in the tool's config, which is passed at invocation, and the exemption
 borrowed from the linter's config rather than restated. Commands and rules:
 [`tools/context-graph/README.md`](tools/context-graph/README.md).
 
+## Trust — a settled fact and an agent's claim look identical
+
+Nothing in a file says where its contents came from. A fact the user settled and a claim
+an agent inferred read exactly the same: a sentence in `data/`, a row in `status.md`, a
+paragraph in a deliverable. The reader — a person, or the next agent — gets both in the
+same declarative voice, and the next agent quoting the inferred one promotes it to a
+settled fact. Left alone, that mechanism only compounds: the longer the base lives, the
+more of it rests on claims nobody ever checked, and the harder it is to tell which.
+
+Patching it afterwards does not scale. A warning written against the one claim that went
+wrong protects against that claim and no other; the next one arrives with no warning
+attached to it, because nobody knew to write one.
+
+### The field
+
+A file carrying settled facts MAY declare who confirmed them:
+
+```yaml
+verified:
+  - by: human:alice
+    at: 2026-03-04T11:20:00+01:00
+```
+
+`by` names the actor **and its kind**: `human:<id>` for a person, `process:<id>` for an
+automated process, `<vendor>/<version>` for a tool or an agent. `at` is ISO 8601 with an
+explicit UTC offset. A single entry may be written as a bare mapping with no list dash;
+read it as a one-item list.
+
+**No field means unconfirmed, and unconfirmed is the ordinary default** — not a gap
+somebody owes you. Which files are in scope at all, and which directories are excluded,
+live in the linter's config; they are repository data and are not restated here.
+
+### Three levels, derived and never written down
+
+| What `verified` holds | Level |
+|---|---|
+| no field | unconfirmed |
+| entries from actors without a `human:` prefix only | machine-confirmed |
+| at least one `human:<id>` entry | reviewed by a person |
+
+The level never gets a field of its own. A second field drifts from the list it is derived
+from, which is the same "one fact, one home" that governs everything else here.
+
+**Reviewed by a person does not mean true.** The field records that somebody looked, and
+nothing beyond that: not that the content is correct, not that it is still current, not
+that the reviewer agreed with it. Read as a verdict on the content it would be worse than
+no field at all, because it would lend an unexamined claim the authority of a review it
+never received.
+
+### An agent never awards itself a human confirmation
+
+**A `human:` entry is written only as the execution of a command the user invoked against
+a named file.** This is a prohibition, not a preference, and it has no exceptions:
+
+- not on the agent's own initiative, and not because a file looks important enough to
+  deserve one;
+- not from anything said in conversation — "yes", "agreed", "that's right", even
+  "confirmed" are not invocations. An agent reading them as one is deciding for itself
+  how far an approval reached, which is the exact failure this field exists to expose;
+- not by reasoning that the user must have read the file, seen the diff, or approved the
+  work that produced it.
+
+The ground is that a field an agent can award itself measures precisely what its absence
+measures, while looking like evidence. Nothing downstream recovers the difference either:
+`human:alice` written by an agent is indistinguishable from `human:alice` written after
+Alice confirmed. The linter checks the field's shape and never its truth, so this rule is
+the entire defence — which is why it is absolute rather than weighed case by case.
+
+When the user says in passing that something is right, carry on and mention the command.
+Do not write the entry.
+
+### Saying the level out loud
+
+An answer resting on an unconfirmed file **says so**, instead of delivering the claim in a
+voice indistinguishable from a settled fact. This is not a tag on every sentence. It
+applies where the level changes what the reader does next — a dispute, an amount, a
+deadline, a commitment to somebody outside, anything about to leave the repository.
+
+Asked what a file contains, just answer: the level changes nothing there and naming it is
+noise. Asked to take a position in a dispute on the strength of a file nobody confirmed,
+say that it was never confirmed, in the same breath as the position.
+
+**This behaviour, not the field, is the point.** A header that never reaches an answer is
+decoration, and the measure of whether this rule works is whether levels start showing up
+where they matter — not how many files carry the field.
+
 ## Context Files & Data Storage Rules
 
 ### Rules

@@ -649,6 +649,151 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
                     break  # one finding per file: the fix is the whole section
 
 
+# check #23: how an actor names itself. `human:` and `process:` carry an id after the
+# colon; a tool or an agent names itself `<vendor>/<version>`. The prefix is the whole
+# point of the field — an actor written as a bare name says who, never what kind, and a
+# level derived from it could not tell a person from the agent that wrote the entry.
+_VERIFIED_ACTOR_RE = re.compile(
+    r"^(?:human|process):[^\s:/]+$"
+    r"|^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._+-]*$")
+
+_VERIFIED_ACTOR_HELP = ("`human:<id>` for a person, `process:<id>` for an automated "
+                        "process, `<vendor>/<version>` for a tool or an agent")
+
+
+def _verified_at_error(at) -> str | None:
+    """Return the reason `at` is not ISO 8601 with an explicit offset, or None.
+
+    YAML resolves a well-formed timestamp to a datetime and a bare date to a date, so
+    the value arrives already typed more often than not; a string only survives when it
+    parsed as nothing else, which is exactly the malformed case. Both shapes have to be
+    judged, and the offset is the property that matters: a wall-clock time with no zone
+    is ambiguous by an hour twice a year, and this field's whole job is to be comparable
+    with the file's last-modified time.
+    """
+    if isinstance(at, _dt.datetime):
+        return None if at.tzinfo is not None else "no UTC offset"
+    if isinstance(at, _dt.date):
+        return "a date with no time or offset"
+    if not isinstance(at, str):
+        return "not a timestamp"
+    try:
+        parsed = _dt.datetime.fromisoformat(at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return "not ISO 8601"
+    return None if parsed.tzinfo is not None else "no UTC offset"
+
+
+def check_verified_shape(config: dict, scope_abs: str | None,
+                         findings: list[Finding]) -> None:
+    """#23 a confirmation trace that is present but malformed.
+
+    The check reads the SHAPE of `verified` and never its absence. "Unconfirmed" is the
+    base's default state, not a debt: a file with no field is the ordinary case, and
+    warning about it would put a finding on thousands of files at once — the surest way
+    to make a new check ignored within a week. What gets checked is the entry somebody
+    deliberately wrote, because that is the only place a mistake can hide behind the
+    appearance of a confirmation.
+
+    ERROR, not WARN, and for the same reason as #22: each failure has one mechanical
+    repair — add the missing key, prefix the actor, rewrite the timestamp — and there is
+    no backlog to pay off, since no file carried the field when the check landed.
+
+    The check cannot, and does not try to, judge whether a `human:` entry is truthful.
+    An entry an agent awarded itself is byte-identical to one written after the person
+    confirmed. That is a rule in the doctrine, not something a linter can recover, and
+    pretending otherwise here would be worse than leaving it stated where it belongs.
+
+    Scope comes from `verified_scope` in the config — directory names matched at any
+    depth, so a nested engagement's `data/` counts as much as the entity's own. Left
+    unconfigured (the template's state), the check is skipped in silence: the names of
+    the directories that hold settled facts are repository data, not template data.
+    """
+    vcfg = config.get("verified_scope") or {}
+    dirs = set(vcfg.get("dirs") or [])
+    if not dirs:
+        return
+
+    # An exemption with a blank reason is indistinguishable from an oversight, so it is
+    # reported and the subtree is checked anyway — the same bargain #21 strikes, for the
+    # same reason: a one-word edit must not be able to silence a check with nothing left
+    # to argue with later.
+    excludes = []
+    for path, reason in (vcfg.get("exclude") or {}).items():
+        norm = str(path).replace("\\", "/").strip("/")
+        if str(reason or "").strip():
+            excludes.append(norm)
+        else:
+            findings.append(Finding("WARN", "verified-shape", norm,
+                                    "subtree is on verified_scope.exclude with no reason "
+                                    "— an exemption nobody can argue with later is "
+                                    "indistinguishable from an oversight, so the check "
+                                    "runs anyway; write the reason or drop the entry"))
+
+    bases = [r["path"] for r in config.get("scan_roots", [])]
+    bases += [r["path"] for r in config.get("file_scopes", [])]
+    seen: set[str] = set()
+    for base in bases:
+        abs_base = os.path.join(REPO_ROOT, base)
+        if not os.path.isdir(abs_base):
+            continue
+        for path in iter_files(abs_base):
+            if not path.endswith(".md"):
+                continue
+            p = os.path.abspath(path)
+            if p in seen:  # a config naming both a tree and a scope inside it
+                continue
+            seen.add(p)
+            if scope_abs is not None and not _under(p, scope_abs):
+                continue
+            relpath = rel(p)
+            if any(relpath == e or relpath.startswith(e + "/") for e in excludes):
+                continue
+            # Directory segments only: a file called `data.md` is not a directory of
+            # settled facts, and the filename never decides scope.
+            if not any(seg in dirs for seg in relpath.split("/")[:-1]):
+                continue
+            fm = parse_frontmatter(read_text(p))
+            if not fm or "verified" not in fm:
+                continue  # the default state, and the loudest thing this check never says
+            raw = fm["verified"]
+            # A single entry may be written as a bare mapping with no list dash; it means
+            # a one-item list and is read as one rather than rejected on punctuation.
+            entries = [raw] if isinstance(raw, dict) else raw if isinstance(raw, list) else None
+            if entries is None:
+                findings.append(Finding("ERROR", "verified-shape", relpath,
+                                        "`verified` is neither a list of entries nor a "
+                                        "single entry — each entry carries `by` and `at`"))
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    findings.append(Finding("ERROR", "verified-shape", relpath,
+                                            f"`verified` entry is not a mapping ({entry!r}) "
+                                            "— each entry carries `by` and `at`"))
+                    continue
+                if "by" not in entry:
+                    findings.append(Finding("ERROR", "verified-shape", relpath,
+                                            "`verified` entry has no `by` — it records that "
+                                            "something was confirmed without recording by "
+                                            "whom, which is the one question the field "
+                                            "exists to answer"))
+                elif not _VERIFIED_ACTOR_RE.match(str(entry["by"]).strip()):
+                    findings.append(Finding("ERROR", "verified-shape", relpath,
+                                            f"`verified` actor `{entry['by']}` carries no "
+                                            f"recognised kind — use {_VERIFIED_ACTOR_HELP}"))
+                if "at" not in entry:
+                    findings.append(Finding("ERROR", "verified-shape", relpath,
+                                            "`verified` entry has no `at` — a confirmation "
+                                            "with no time cannot be compared with the "
+                                            "file's last change"))
+                else:
+                    why = _verified_at_error(entry["at"])
+                    if why:
+                        findings.append(Finding("ERROR", "verified-shape", relpath,
+                                                f"`verified` time `{entry['at']}` is {why} "
+                                                "— use ISO 8601 with an explicit UTC "
+                                                "offset, e.g. 2026-03-04T11:20:00+01:00"))
+
 def check_names(entity: str, cfg: dict, findings: list[Finding]) -> None:
     """#3 date-prefix convention in communication/ and archive/."""
     date_dirs = set(cfg["date_prefix_dirs"])
@@ -1388,6 +1533,11 @@ def run(config: dict, scope: str | None, today: _dt.date,
     # Indexes live at scope roots and nested inside entities alike, so #22 runs once
     # over every declared directory rather than per entity.
     check_index_log(config, scope_abs, findings)
+
+    # Same shape as #22, for the same reason: a `data/` directory sits inside an entity,
+    # but the field is scoped by directory name rather than by entity, so the walk runs
+    # once over the declared scopes instead of once per entity.
+    check_verified_shape(config, scope_abs, findings)
 
     # A link crosses entities, scopes and the registry alike, so #19 runs once over the
     # whole scope rather than per entity.
