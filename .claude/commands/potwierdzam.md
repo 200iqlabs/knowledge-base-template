@@ -30,13 +30,17 @@ reached. Background and the three trust levels: the core `CLAUDE.md`, *Trust*.
    #23 can never disagree about which files carry settled facts. Identity comes from the
    schema's `default_owner`, so the id matches the task registry's and nobody retypes it.
    Add `--owner <id>` only when somebody other than the default owner is confirming; an
-   id outside the schema's `owners` is refused rather than invented.
+   id outside the schema's `owners` is refused rather than invented, and so is the
+   schema's `shared_owner` — a confirmation records who looked, and the id tasks
+   belonging to everybody carry names nobody who could be asked about it.
 
-2. **If the script refuses, relay the refusal and stop.** A refusal means the file is out
-   of scope — material that is put down (`archive/`, `communication/`, `output/`,
-   `inbox/`) records what happened and is not confirmed, and `tasks/` carries its own
-   header contract. Do not look for a way around it: the scope is a decision written in
-   the config, not an obstacle.
+2. **If the script refuses, relay the refusal and stop.** Either the file is out of scope
+   — material that is put down (`archive/`, `communication/`, `output/`, `inbox/`)
+   records what happened and is not confirmed, `tasks/` carries its own header contract,
+   and a `data/` nested inside any of those is still put-down material — or the file's
+   existing `verified` field is malformed, which this command reports rather than
+   repairs. Do not look for a way around either: the scope is a decision written in the
+   config, and a broken entry is the person's to fix.
 
 3. Report what was written — the file, the actor, the timestamp, and how many entries the
    file now carries. Then **run the linter over that file** so a malformed header is

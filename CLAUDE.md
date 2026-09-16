@@ -504,9 +504,14 @@ live in the linter's config; they are repository data and are not restated here.
 
 | What `verified` holds | Level |
 |---|---|
-| no field | unconfirmed |
-| entries from actors without a `human:` prefix only | machine-confirmed |
+| no field, or a field holding no entries at all | unconfirmed |
+| one or more entries, none of them from a `human:` actor | machine-confirmed |
 | at least one `human:<id>` entry | reviewed by a person |
+
+**A level is earned by an entry, never by the field.** An empty list (`verified: []`) is
+unconfirmed, exactly as an absent field is: read as "no entry carries a `human:` prefix"
+it would satisfy the middle row without a single confirmation behind it, and a level that
+can be reached by writing nothing measures nothing.
 
 The level never gets a field of its own. A second field drifts from the list it is derived
 from, which is the same "one fact, one home" that governs everything else here.

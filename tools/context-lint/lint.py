@@ -660,21 +660,42 @@ _VERIFIED_ACTOR_RE = re.compile(
 _VERIFIED_ACTOR_HELP = ("`human:<id>` for a person, `process:<id>` for an automated "
                         "process, `<vendor>/<version>` for a tool or an agent")
 
-# A top-level `verified:` key in the raw header text. Only consulted when the header
-# failed to parse, so that a trace made unreadable is not mistaken for one never written.
-_VERIFIED_TOP_KEY_RE = re.compile(r"^verified[ \t]*:", re.M)
+# Directories whose contents are put DOWN rather than settled: raw material kept
+# (`archive/`, `inbox/`), the text of what was sent (`communication/`), sealed artefacts
+# (`output/`), and `tasks/`, which carries a header contract of its own. A `data/`
+# directory nested inside one of them — `<ENTITY>/archive/2026/data/` — is still put-down
+# material, so the segment that puts it there outranks the segment that would pull it in.
+#
+# Named once, here, because check #23 and the confirmation command must not disagree
+# about it. A file one of them calls confirmable while the other never looks at it is the
+# worst of the two possible errors: a confirmation validated by nothing.
+VERIFIED_PUT_DOWN_DIRS = ("archive", "communication", "output", "inbox", "tasks")
+
+# A `verified` key in the raw header text. Only consulted when the header failed to
+# parse, so that a trace made unreadable is not mistaken for one never written — which
+# is also why the pattern is not anchored to a line start alone: a header broken badly
+# enough to stop parsing may carry the key quoted, or inside a flow mapping
+# (`{verified: [...]`), and a line-anchored pattern misses exactly those. Detecting the
+# key structurally is not available in this branch by construction: it runs precisely
+# because nothing could parse the header.
+_VERIFIED_TOP_KEY_RE = re.compile(r"""(?:^|[{,])[ \t]*(?P<q>['"]?)verified(?P=q)[ \t]*:""",
+                                  re.M)
 
 
 def _frontmatter_block(text: str) -> str | None:
-    """Return the raw text between the frontmatter fences, or None if there is none.
+    """Return the raw header text after the opening fence, or None if there is none.
 
-    Delimited exactly as `parse_frontmatter` delimits it, so the two can never disagree
-    about where a header begins and ends.
+    The closing fence is found where `parse_frontmatter` finds it. When there is none,
+    the rest of the file is returned rather than nothing: a fence opened and never closed
+    is one of the shapes a broken header takes, and answering None there would hand the
+    very case this fallback exists for back to the silence owed only to an ABSENT field.
+    The price is a body line beginning `verified:` in a document that opens on a thematic
+    break, reported as a header that does not parse — which, read as a header, it is.
     """
     if not text.startswith("---"):
         return None
     end = text.find("\n---", 3)
-    return None if end == -1 else text[3:end]
+    return text[3:] if end == -1 else text[3:end]
 
 
 def _verified_at_error(at) -> str | None:
@@ -721,7 +742,8 @@ def check_verified_shape(config: dict, scope_abs: str | None,
     pretending otherwise here would be worse than leaving it stated where it belongs.
 
     Scope comes from `verified_scope` in the config — directory names matched at any
-    depth, so a nested engagement's `data/` counts as much as the entity's own. Left
+    depth, so a nested engagement's `data/` counts as much as the entity's own, while a
+    `data/` nested under put-down material is not (`VERIFIED_PUT_DOWN_DIRS`). Left
     unconfigured (the template's state), the check is skipped in silence: the names of
     the directories that hold settled facts are repository data, not template data.
     """
@@ -765,9 +787,12 @@ def check_verified_shape(config: dict, scope_abs: str | None,
             relpath = rel(p)
             if any(relpath == e or relpath.startswith(e + "/") for e in excludes):
                 continue
+            segments = relpath.split("/")[:-1]
             # Directory segments only: a file called `data.md` is not a directory of
             # settled facts, and the filename never decides scope.
-            if not any(seg in dirs for seg in relpath.split("/")[:-1]):
+            if not any(seg in dirs for seg in segments):
+                continue
+            if any(seg in VERIFIED_PUT_DOWN_DIRS for seg in segments):
                 continue
             text = read_text(p)
             fm = parse_frontmatter(text)
