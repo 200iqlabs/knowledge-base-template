@@ -660,6 +660,22 @@ _VERIFIED_ACTOR_RE = re.compile(
 _VERIFIED_ACTOR_HELP = ("`human:<id>` for a person, `process:<id>` for an automated "
                         "process, `<vendor>/<version>` for a tool or an agent")
 
+# A top-level `verified:` key in the raw header text. Only consulted when the header
+# failed to parse, so that a trace made unreadable is not mistaken for one never written.
+_VERIFIED_TOP_KEY_RE = re.compile(r"^verified[ \t]*:", re.M)
+
+
+def _frontmatter_block(text: str) -> str | None:
+    """Return the raw text between the frontmatter fences, or None if there is none.
+
+    Delimited exactly as `parse_frontmatter` delimits it, so the two can never disagree
+    about where a header begins and ends.
+    """
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    return None if end == -1 else text[3:end]
+
 
 def _verified_at_error(at) -> str | None:
     """Return the reason `at` is not ISO 8601 with an explicit offset, or None.
@@ -753,9 +769,23 @@ def check_verified_shape(config: dict, scope_abs: str | None,
             # settled facts, and the filename never decides scope.
             if not any(seg in dirs for seg in relpath.split("/")[:-1]):
                 continue
-            fm = parse_frontmatter(read_text(p))
-            if not fm or "verified" not in fm:
+            text = read_text(p)
+            fm = parse_frontmatter(text)
+            if not fm:
+                # `{}` means either "delimited but empty" or "did not parse", and only the
+                # second can hide a malformed trace: an unterminated list under `verified`
+                # reaches here looking exactly like a file that never had the field. The
+                # silence this check owes is to the ABSENT field, never to one written and
+                # then made unreadable, so the raw block gets one look before moving on.
+                block = _frontmatter_block(text)
+                if block is not None and _VERIFIED_TOP_KEY_RE.search(block):
+                    findings.append(Finding("ERROR", "verified-shape", relpath,
+                                            "the header carries a `verified` key but does "
+                                            "not parse as YAML, so the trace cannot be "
+                                            "read at all — repair the header"))
                 continue  # the default state, and the loudest thing this check never says
+            if "verified" not in fm:
+                continue
             raw = fm["verified"]
             # A single entry may be written as a bare mapping with no list dash; it means
             # a one-item list and is read as one rather than rejected on punctuation.
