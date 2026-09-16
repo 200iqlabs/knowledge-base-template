@@ -99,17 +99,28 @@ class Link:
 
 # --- the repository ------------------------------------------------------------
 
+# Windows gives a console to any console application started by a process that has none,
+# and this module is read by one that has none on purpose — the graph's background build.
+# Every `git` call then opens a window, and on a host whose default terminal is Windows
+# Terminal that is a tab per call, flashing over whatever the user was doing. This flag
+# is what suppresses it. An empty mapping on POSIX rather than `creationflags=0`, because
+# subprocess rejects the argument there outright. graph.py carries the same two lines and
+# the reasoning behind them: either tool runs when the other is absent, so neither can
+# import the constant from the other.
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}
+
+
 def repo_root(explicit: str | None) -> str:
     if explicit:
         return os.path.abspath(explicit)
     out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, **NO_WINDOW)
     return out.stdout.strip() if out.returncode == 0 else os.getcwd()
 
 
 def git(root: str, *args: str, stdin: str | None = None) -> str:
     out = subprocess.run(["git", *args], cwd=root, input=stdin,
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, **NO_WINDOW)
     # check-ignore answers 1 when nothing matched; its stdout is still the answer
     return out.stdout if out.returncode in (0, 1) else ""
 
