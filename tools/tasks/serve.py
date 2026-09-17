@@ -608,7 +608,8 @@ def render_bad_path(path: str) -> bytes:
     body = (
         "<h1>Not a task address</h1>"
         f'<p><code class="path">{html.escape(path)}</code> is not one — a task lives at '
-        "its bare identifier, as in <code class=\"path\">/LABS-244</code>. Nothing was "
+        'its bare identifier, as in <code class="path">/'
+        f'{html.escape(getattr(regen, "ID_PREFIX", "REPO"))}-244</code>. Nothing was '
         "looked up.</p>"
         '<p><a href="/">← back to the registry</a></p>'
     )

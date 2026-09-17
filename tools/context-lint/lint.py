@@ -600,16 +600,16 @@ def check_index_log(config: dict, scope_abs: str | None, findings: list[Finding]
                 continue
             # Normalised before the `seen` test, not after: the declared bases are
             # written with forward slashes, so on Windows one walk yields
-            # `...\context/qamera/prospects\_index.md` and another
-            # `...\context\qamera\prospects\_index.md` for the same file. Two spellings,
+            # `...\context/projects/EXAMPLE_PROJECT\_index.md` and another
+            # `...\context\projects\EXAMPLE_PROJECT\_index.md` for the same file. Two spellings,
             # one file, and a config that names both a tree and a scope inside it —
             # which is the normal case — reported it twice.
             p = os.path.abspath(os.path.join(dirpath, "_index.md"))
             if p in seen:
                 continue
             seen.add(p)
-            # Component boundary, not a string prefix: `.../QAMERA_AI` must not select
-            # `.../QAMERA_AI-OLD`, which is exactly what a bare startswith would do and
+            # Component boundary, not a string prefix: `.../EXAMPLE_PROJECT` must not select
+            # `.../EXAMPLE_PROJECT-OLD`, which is exactly what a bare startswith would do and
             # what a scoped run promises it will not.
             #
             # Tested in both directions, because the index a narrowed run is likeliest

@@ -25,9 +25,11 @@ structure you could sketch in five minutes:
 | `CLAUDE.md` | The rules themselves — the working core the agent loads |
 | `context/` | The knowledge base: entities, their state, their tasks |
 | `tools/context-lint/` | Deterministic, read-only consistency checks over `context/` |
-| `tools/tasks/` | Task registry generator, the on-demand report, and `relink.py`, which repairs the links a move broke |
+| `tools/tasks/` | Task registry generator, the on-demand report, the browser view, and `relink.py`, which repairs the links a move broke |
+| `tools/context-graph/` | The link graph — what points at a file, what nothing points at, which entities are entangled |
+| `tools/verified/` | Records that a person confirmed a file's contents — the one way a human confirmation is ever written |
 | `tools/hooks/` | Pre-commit hook that keeps the generated sections current |
-| `skills/`, `.claude/commands/` | `/setup`, `/lint`, `/close-session`, `/today` |
+| `skills/`, `.claude/commands/` | `/setup`, `/lint`, `/today`, `/potwierdzam`, and the `close-session`, `tasks` and `relink` skills |
 
 ## Requirements
 
@@ -39,7 +41,7 @@ structure you could sketch in five minutes:
 
 ```bash
 pip install pyyaml
-python tools/context-lint/lint.py     # 0 findings, 1 entity scanned
+python tools/context-lint/lint.py     # 0 ERROR, a few WARN (1 entity scanned)
 python tools/tasks/regen.py --check   # 3 live tasks, 0 errors
 ```
 
@@ -48,6 +50,12 @@ with. It exists so the first run returns something visible: a tool that prints n
 looks the same whether it is working or scanning an empty configuration. Note that the
 linter reports the **number of entities scanned** alongside the findings, for exactly
 that reason.
+
+**The WARNs on that first run are the example entity being an example, not something to
+fix.** Its dates are written into the files, so `Last updated` goes stale and one task
+goes overdue as soon as the calendar passes them; and nothing outside it links to its
+files, so the orphan check reports them. What matters on the first run is the **0 ERROR**
+and the entity count — the WARNs leave with the example.
 
 Then configure the base for yourself:
 
