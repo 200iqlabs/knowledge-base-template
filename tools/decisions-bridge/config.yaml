@@ -1,0 +1,27 @@
+# decisions-bridge — where this knowledge base's decisions are carried.
+#
+# One entry per code repository. Run:
+#   python tools/decisions-bridge/bridge.py            # every target below
+#   python tools/decisions-bridge/bridge.py --target erp
+# or `/sync-decisions` in a Claude Code session opened in this knowledge base.
+#
+# Relative paths resolve against the root of THIS knowledge base, not the directory the
+# command was started from — so `../my-system` means "the folder next to this repository",
+# on Windows and POSIX alike. Absolute paths and `~` work too; forward slashes are fine on
+# Windows.
+#
+# Empty by default: a template cannot know where your code lives. Until a target is
+# configured, pass one ad hoc instead:
+#   python tools/decisions-bridge/bridge.py --repo ../my-system --source context/projects/MY_PROJECT
+
+targets: []
+
+# Example — uncomment and adapt:
+#
+# targets:
+#   - name: erp                      # what --target selects; letters, digits, . _ -
+#     repo: ../erp-system            # the code repository (must already exist)
+#     sources:                       # directories whose decisions/ folder is carried across
+#       - context/projects/ERP       #   an entity's own decisions
+#       - context                    #   organisation-wide ones, in context/decisions/
+#     # output: .claude/rules/knowledge-base-decisions.md   # the default; a path inside `repo`

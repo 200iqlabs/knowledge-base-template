@@ -47,6 +47,7 @@ exclude_dirs:
   - archive
   - inbox
   - tasks
+  - decisions
 # Scope roots whose immediate subdirectories are entity roots.
 entity_scopes:
   - context/projects

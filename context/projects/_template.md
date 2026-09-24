@@ -17,6 +17,7 @@ context/projects/<PROJECT>/
   archive/           # processed raw material — do NOT read unless asked
   communication/     # text of messages you sent — do NOT read
   tasks/             # one file per task
+  decisions/         # one file per decision — see CLAUDE.md -> Decisions
 ```
 
 ## `project.md`

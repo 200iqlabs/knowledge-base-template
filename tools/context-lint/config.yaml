@@ -51,6 +51,7 @@ catalog_exclude_dirs:
   - archive
   - inbox
   - tasks
+  - decisions   # one file per decision; the folder is its own list
 
 # check #1 forward: only these file types are mapped per-file in catalog.md.
 catalog_check_extensions: [".md"]
