@@ -26,6 +26,7 @@ a customer, a partnership. Each entity is a folder under a scope root
 | `<ENTITY>/archive/` | processed raw material | **do NOT read** unless explicitly asked |
 | `<ENTITY>/communication/` | text of messages you sent. Optional | **do NOT read** (see `Communication Files`) |
 | `<ENTITY>/tasks/` | one file per task. Optional | via the `AUTO` section of `status.md` (see `Task Registry`) |
+| `<ENTITY>/decisions/` | one file per decision. Optional | read freely (see `Decisions`) |
 | `<ENTITY>/catalog.md` | map of the entity's files | read as a map, never as state |
 
 The "do NOT read" directories are not secrets — they are **volume control**. An entity
@@ -426,6 +427,47 @@ header, and the log under it grew to 78 kB of an 83 kB file — 93 % of the most
 file in the base — with nothing reporting it. A sentence in a header is not a guard, so
 the linter now holds this one (check #22).
 
+## Decisions
+
+A **decision** is something settled that later work has to follow: the system boundary,
+which module owns what, why a format or a tool was chosen. It lives as **one file per
+decision** in the entity's `decisions/` folder — or in `context/decisions/` when it
+belongs to no single entity.
+
+```yaml
+---
+title: "Payroll stays outside the system"   # always quoted
+status: accepted        # proposed | accepted | superseded
+date: 2026-09-20        # when it was settled
+superseded_by:          # required when status: superseded — the file name that replaced it
+---
+```
+
+Then free-form Markdown — a good default is **Context** (what forced the choice),
+**Decision** (what was settled, stated so it can be followed), **Consequences** (what
+code and people now do differently). Write it for a reader who was not in the room: the
+reader is usually an agent in another repository.
+
+**A decision is changed by a new decision, not by an edit.** When a choice is reversed,
+write the new file and set the old one to `superseded` with `superseded_by` — the history
+of *why it used to be different* is exactly what somebody asks about a year later. Typos
+and clarifications are ordinary edits.
+
+**Decisions reach the code repository through the bridge, and only through it.** The
+code usually lives in a different repository, whose agent never reads this one.
+`/sync-decisions` (`tools/decisions-bridge/`) collects every `accepted` decision and
+writes them into that repository as one generated file its agent loads at startup. It is
+run by hand, never by a hook — whoever runs it knows the code side now has the decision.
+This knowledge base stays the source of truth; the file over there is a reflection, and
+is never edited there. Configuration and the reasoning:
+[`tools/decisions-bridge/README.md`](tools/decisions-bridge/README.md).
+
+So after recording or superseding a decision that affects code, **offer to run
+`/sync-decisions`** — do not run it unasked, and do not paste the decision into the code
+repository by other means: a second route is a second copy, and it drifts.
+
+`decisions/` is referenced as a folder in `catalog.md`, not file by file (it is in
+`catalog_exclude_dirs`): the folder is its own list.
 ## The link graph — what connects to this file
 
 Every index above answers **containment**: what is inside what. None answers **relation**:

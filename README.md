@@ -29,7 +29,8 @@ structure you could sketch in five minutes:
 | `tools/context-graph/` | The link graph — what points at a file, what nothing points at, which entities are entangled |
 | `tools/verified/` | Records that a person confirmed a file's contents — the one way a human confirmation is ever written |
 | `tools/hooks/` | Pre-commit hook that keeps the generated sections current |
-| `skills/`, `.claude/commands/` | `/setup`, `/lint`, `/today`, `/potwierdzam`, and the `close-session`, `tasks` and `relink` skills |
+| `tools/decisions-bridge/` | Carries accepted decisions into a separate code repository, on demand |
+| `skills/`, `.claude/commands/` | `/setup`, `/lint`, `/today`, `/potwierdzam`, `/sync-decisions`, and the `close-session`, `tasks` and `relink` skills |
 
 ## Requirements
 
@@ -73,6 +74,42 @@ If you would rather do it by hand, the same ground is covered by
 ```bash
 bash tools/hooks/install.sh
 ```
+
+## Carrying decisions into your code repository
+
+Decisions live here, but the code usually lives in another repository — and the agent
+working there reads only that one. `/sync-decisions` closes the gap: it collects every
+accepted decision (`context/**/decisions/*.md`) and writes them into the code repository
+as one generated file, `.claude/rules/knowledge-base-decisions.md`, which Claude Code
+loads by itself at the start of every session there.
+
+Point it at your code repository once, in `tools/decisions-bridge/config.yaml`:
+
+```yaml
+targets:
+  - name: my-system
+    repo: ../my-system                  # relative to this repository's root
+    sources: [context/projects/MY_PROJECT]
+```
+
+then, whenever a decision is added or changed:
+
+```bash
+python tools/decisions-bridge/bridge.py            # or /sync-decisions in Claude Code
+```
+
+It runs only when you run it — no hook, no background job — and it only ever writes that
+one file; the code repository's commit stays yours. This knowledge base remains the
+source of truth: the file over there says it is generated and must not be edited. Try it
+on the example entity against an empty folder standing in for a code repository:
+
+```bash
+mkdir ../scratch
+python tools/decisions-bridge/bridge.py --repo ../scratch --source context/projects/EXAMPLE_PROJECT
+```
+
+Details, and a line for agents that read `AGENTS.md`:
+[`tools/decisions-bridge/README.md`](tools/decisions-bridge/README.md).
 
 ## Removing the example entity
 
