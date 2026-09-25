@@ -171,6 +171,16 @@ That boundary is the whole rule. Measured three ways on a live base of 8 212 fil
 Directories the linter already excludes from per-file cataloguing are exempt here too, for
 the same reason: they are referenced as a folder, not file by file.
 
+**The anchors are exempt as well** — each scope's own `self_index_marker` file, and the
+linter's `structural_files` (`status.md`, `catalog.md`, `project.md`, …) lying **directly
+in an entity root**. The Index Protocol reaches them by name, not by link, so a missing
+inbound link says nothing about whether anyone can find them. Reported, they made about a
+fifth of all orphans on the live base (40 of 184), and the only repair available was a row
+of links added to `status.md` — the one file read in full on every entry, paying for a
+fact the protocol already guarantees. The boundary is the entity root again: a
+`catalog.md` or `README.md` further down is not where the protocol looks, so it still
+needs a link from somewhere that is.
+
 The report prints the number exempted next to the number reported, so that somebody
 dropping an `_index.md` halfway up an entity — and silently exempting hundreds of files —
 shows up as a jump rather than as silence.
@@ -184,7 +194,7 @@ Passed at invocation; the copy next to the script is a neutral default.
 | `scan_roots` | where nodes are looked for |
 | `state_dir` | where the graph, hash cache and report are written |
 | `lint_config` | the linter config to borrow the scope and exemption rules from |
-| `self_index_marker`, `exclude_dirs`, `entity_scopes` | inline fallbacks, used only when `lint_config` cannot be read |
+| `self_index_marker`, `exclude_dirs`, `entity_scopes`, `structural_files` | inline fallbacks, used only when `lint_config` cannot be read or does not declare the key |
 | `thresholds.build_seconds` | how long a first build may be waited for |
 | `thresholds.line_max_age_seconds` | how old the published graph may be before `stats --line` starts a rebuild behind it |
 

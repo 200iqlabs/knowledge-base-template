@@ -29,6 +29,7 @@ import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, asdict
+from urllib.parse import unquote
 
 # --- dependency guard: fail readable, not with a traceback -------------------
 try:
@@ -298,7 +299,14 @@ def check_catalog(entity: str, cfg: dict, findings: list[Finding]) -> None:
 
     # reverse: markdown-link targets that look like files must resolve
     for target in MD_LINK_RE.findall(catalog_text):
-        t = target.strip().split("#", 1)[0]
+        # Read the destination the way relink.py does: a path with spaces is written
+        # `(<dir name/file.md>)` or percent-encoded, and both are valid CommonMark. Taken
+        # literally, the brackets made every such link a "missing file" here while relink
+        # and the graph resolved it — two answers to one question.
+        t = target.strip()
+        if t.startswith("<") and t.endswith(">"):
+            t = t[1:-1]
+        t = unquote(t.split("#", 1)[0])
         if not t or t.startswith(("http://", "https://", "mailto:")):
             continue
         if "." not in os.path.basename(t):  # only file-like targets

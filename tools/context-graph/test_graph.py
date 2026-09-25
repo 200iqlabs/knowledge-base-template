@@ -211,6 +211,59 @@ class ExemptTest(unittest.TestCase):
         self.assertTrue(graph.exempt(self.root,
                                      "context/projects/ALPHA/archive/one.md", self.rules))
 
+    def test_a_structural_file_at_the_entity_root_is_exempt(self):
+        """The Index Protocol reaches it by name, so no inbound link is no finding."""
+        rules = dict(self.rules, structural_files=["status.md", "catalog.md"])
+        self.assertTrue(graph.exempt(self.root, "context/projects/ALPHA/catalog.md", rules))
+
+    def test_a_structural_name_below_the_entity_root_is_not_exempt(self):
+        rules = dict(self.rules, structural_files=["status.md", "catalog.md"])
+        self.assertFalse(graph.exempt(self.root,
+                                      "context/projects/ALPHA/data/catalog.md", rules))
+
+    def test_any_other_file_at_the_entity_root_is_not_exempt(self):
+        rules = dict(self.rules, structural_files=["status.md", "catalog.md"])
+        self.assertFalse(graph.exempt(self.root, "context/projects/ALPHA/notes.md", rules))
+
+    def test_no_structural_files_declared_exempts_no_anchor(self):
+        self.assertFalse(graph.exempt(self.root,
+                                      "context/projects/ALPHA/catalog.md", self.rules))
+
+    def test_the_scope_index_itself_is_exempt(self):
+        self.assertTrue(graph.exempt(self.root, "context/projects/_index.md", self.rules))
+
+    def test_an_index_outside_every_scope_is_not_exempt(self):
+        self.assertFalse(graph.exempt(self.root, "context/operations/_index.md", self.rules))
+
+
+class ResolveRulesTest(unittest.TestCase):
+    """The exemption rule is borrowed from the linter's config, not restated."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def lint(self, text):
+        with open(os.path.join(self.root, "lint.yaml"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return graph.resolve_rules({"lint_config": "lint.yaml",
+                                    "structural_files": ["fallback.md"]}, self.root)
+
+    def test_structural_files_come_from_the_linter(self):
+        rules = self.lint("structural_files:\n  - status.md\n  - catalog.md\n")
+        self.assertEqual(rules["structural_files"], ["status.md", "catalog.md"])
+
+    def test_an_explicitly_empty_list_is_honoured(self):
+        rules = self.lint("structural_files: []\n")
+        self.assertEqual(rules["structural_files"], [])
+
+    def test_the_inline_fallback_holds_when_the_linter_is_silent(self):
+        rules = self.lint("self_index_marker: _index.md\n")
+        self.assertEqual(rules["structural_files"], ["fallback.md"])
+
 
 class ConfigFingerprintTest(unittest.TestCase):
     """What the published counts were computed under, so a stale one can be spotted."""

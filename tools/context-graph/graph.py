@@ -264,6 +264,7 @@ def resolve_rules(config: dict, root: str) -> dict:
         "self_index_marker": config.get("self_index_marker", "_index.md"),
         "exclude_dirs": list(config.get("exclude_dirs", [])),
         "entity_scopes": list(config.get("entity_scopes", [])),
+        "structural_files": list(config.get("structural_files", [])),
     }
     lint_config = config.get("lint_config")
     if not lint_config:
@@ -287,6 +288,8 @@ def resolve_rules(config: dict, root: str) -> dict:
         rules["exclude_dirs"] = list(lint["catalog_exclude_dirs"])
     if lint.get("scan_roots") is not None:
         rules["entity_scopes"] = [r["path"] for r in lint["scan_roots"] if r.get("path")]
+    if lint.get("structural_files") is not None:
+        rules["structural_files"] = list(lint["structural_files"])
     return rules
 
 
@@ -637,14 +640,27 @@ def exempt(root: str, rel: str, rules: dict) -> bool:
     that. The ancestor walk stops at the entity root on purpose: a scope-level index
     lists entities, not their internals, so letting it exempt anything would exempt
     everything — measured at 100% of candidates, which is a check that never fires.
+
+    The anchors are exempt for a different reason: the Index Protocol reaches them by
+    name — the scope's own index first, then an entity's structural files at its root —
+    so a missing inbound link says nothing about whether they can be found. Reporting
+    them made roughly a fifth of all orphans a list of files every session opens, and
+    the only repair on offer was a link row added to `status.md`, the file read in full
+    on every entry. Only the entity root counts: a `catalog.md` or `README.md` deeper
+    down is not where the protocol looks, so it still has to be linked.
     """
     if any(part in rules["exclude_dirs"] for part in rel.split("/")[:-1]):
+        return True
+    marker = rules["self_index_marker"]
+    if any(rel == scope.rstrip("/") + "/" + marker for scope in rules["entity_scopes"]):
         return True
     found = entity_of(rel, rules["entity_scopes"])
     if not found:
         return False
     _name, entity_root = found
-    marker = rules["self_index_marker"]
+    if (os.path.dirname(rel) == entity_root
+            and os.path.basename(rel) in rules.get("structural_files", [])):
+        return True
     directory = os.path.dirname(rel)
     while directory and directory != entity_root and directory.startswith(entity_root + "/"):
         # `isfile`, not `exists`: the linter looks the marker up among a directory's file
