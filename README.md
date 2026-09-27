@@ -53,10 +53,10 @@ linter reports the **number of entities scanned** alongside the findings, for ex
 that reason.
 
 **The WARNs on that first run are the example entity being an example, not something to
-fix.** Its dates are written into the files, so `Last updated` goes stale and one task
-goes overdue as soon as the calendar passes them; and nothing outside it links to its
-files, so the orphan check reports them. What matters on the first run is the **0 ERROR**
-and the entity count — the WARNs leave with the example.
+fix.** Its dates are written into the files, so its `Last updated` goes stale and one of
+its tasks goes overdue as soon as the calendar passes them — two WARNs. What matters on
+the first run is the **0 ERROR** and the entity count — the WARNs leave with the example,
+and after `/setup` the linter reports `0 findings`.
 
 Then configure the base for yourself:
 
